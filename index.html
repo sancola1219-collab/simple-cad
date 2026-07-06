@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>簡易CAD — 2D 繪圖</title>
 <style>
 :root{
@@ -31,7 +31,10 @@ button.primary:hover{background:#3182ce;}
 #toolbox .grp{color:var(--dim); font-size:11px; margin-top:6px;}
 
 #canvasWrap{flex:1; position:relative; min-width:0;}
-#cv{position:absolute; inset:0; width:100%; height:100%; display:block; cursor:crosshair;}
+#cv{position:absolute; inset:0; width:100%; height:100%; display:block; cursor:crosshair; touch-action:none;}
+#touchBar{position:absolute; left:50%; transform:translateX(-50%); bottom:14px; display:none; gap:8px; z-index:15;}
+#touchBar button{padding:10px 16px; font-size:15px; border-radius:8px; background:#2b6cb0ee; border-color:var(--acc); color:#fff;}
+.mobile-only{display:none;}
 #floatIn{position:absolute; display:none; z-index:20; width:150px; padding:4px 6px; background:#fff; color:#000; border:2px solid var(--acc); border-radius:3px; font-size:14px; font-family:inherit;}
 
 #side{width:230px; background:var(--panel); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow-y:auto;}
@@ -70,6 +73,24 @@ button.primary:hover{background:#3182ce;}
 #previewWrap{flex:1; background:#555; border-radius:4px; display:flex; align-items:center; justify-content:center; overflow:auto; padding:12px;}
 #previewWrap svg{background:#fff; box-shadow:0 2px 14px #0008;}
 
+/* ── 手機/窄螢幕 ── */
+@media (max-width: 820px){
+  .mobile-only{display:inline-block;}
+  .desktop-only{display:none !important;}
+  #topbar{padding:4px;}
+  #topbar button{padding:7px 9px;}
+  #main{flex-direction:column;}
+  #canvasWrap{order:1;}
+  #toolbox{order:2; width:100%; flex-direction:row; overflow-x:auto; overflow-y:hidden;
+    border-right:none; border-top:1px solid var(--border); padding:4px; gap:4px;}
+  #toolbox .grp{display:none;}
+  #toolbox button{flex:0 0 auto; width:auto; padding:9px 10px; font-size:14px;}
+  #side{position:fixed; right:0; top:0; bottom:0; width:min(78vw,290px); z-index:45;
+    transform:translateX(100%); transition:transform .18s; box-shadow:-6px 0 16px #000a;}
+  #side.open{transform:none;}
+  #status{font-size:11px; gap:8px;}
+}
+
 /* ── 實際列印 ── */
 #printArea{display:none;}
 @media print{
@@ -94,10 +115,11 @@ button.primary:hover{background:#3182ce;}
     <button id="btnZoomExt">縮放全圖</button>
     <span class="sep"></span>
     <button id="btnPdf" class="primary">匯出 PDF</button>
-    <button id="btnSvg">SVG</button>
-    <button id="btnPng">PNG</button>
+    <button id="btnSvg" class="desktop-only">SVG</button>
+    <button id="btnPng" class="desktop-only">PNG</button>
     <button id="btnDxf">DXF</button>
-    <input type="file" id="fileIn" accept=".json" style="display:none">
+    <button id="btnPanel" class="mobile-only">☰ 圖層</button>
+    <input type="file" id="fileIn" accept=".json,.dxf" style="display:none">
   </div>
   <div id="main">
     <div id="toolbox">
@@ -118,6 +140,11 @@ button.primary:hover{background:#3182ce;}
     <div id="canvasWrap">
       <canvas id="cv"></canvas>
       <input id="floatIn" autocomplete="off">
+      <div id="touchBar">
+        <button id="tbLen">⌨ 長度</button>
+        <button id="tbDone">✓ 完成</button>
+        <button id="tbCancel">✕ 取消</button>
+      </div>
     </div>
     <div id="side">
       <h3>圖層 <button id="btnAddLayer" style="float:right;padding:1px 8px;margin-right:8px">＋</button></h3>
@@ -437,10 +464,10 @@ function dimPrimitives(d, hOver) {
 }
 
 // ─── 鎖點 ───────────────────────────────────────────────
-function getSnap(mx, my) {
+function getSnap(mx, my, tolOver) {
   snapMark = null;
   if ($("chkOsnap").checked) {
-    const tol = 10; let best = null, bd = tol;
+    const tol = tolOver || 10; let best = null, bd = tol;
     const w = s2w(mx, my), tw = tol / view.scale; // 世界座標粗篩範圍
     for (const e of nearEntities(w, tw)) {
       const b = bboxCached(e); // 粗篩:游標不在包圍盒附近就跳過(大圖效能關鍵)
@@ -648,6 +675,7 @@ function setTool(t) {
   $("hint").textContent = HINTS[t] || "";
   if (t !== "select") { selection.clear(); updateSelInfo(); }
   redraw(true);
+  updateTouchBar();
 }
 function addEntity(e) {
   snapshot();
@@ -663,9 +691,9 @@ function finishPoly(closed) {
   pts = []; redraw();
 }
 function cancelTool() {
-  if (tool === "poly" && pts.length >= 2) { finishPoly(false); return; }
-  if (tool === "line" && pts.length) { pts = []; redraw(); return; }
-  if (pts.length) { pts = []; redraw(); return; }
+  if (tool === "poly" && pts.length >= 2) { finishPoly(false); updateTouchBar(); return; }
+  if (tool === "line" && pts.length) { pts = []; redraw(); updateTouchBar(); return; }
+  if (pts.length) { pts = []; redraw(); updateTouchBar(); return; }
   setTool("select");
 }
 
@@ -680,20 +708,25 @@ cv.addEventListener("mousedown", e => {
   const ref = pts.length ? pts[pts.length - 1] : null;
   w = applyOrtho(w, ref);
 
-  switch (tool) {
-    case "select": {
-      const hit = hitTest(w);
-      if (hit) {
-        if (e.shiftKey) { selection.has(hit.id) ? selection.delete(hit.id) : selection.add(hit.id); }
-        else if (!selection.has(hit.id)) { selection.clear(); selection.add(hit.id); }
-        moveDrag = { lastW: w, moved: false };
-      } else {
-        if (!e.shiftKey) selection.clear();
-        marquee = { x1: mx, y1: my, x2: mx, y2: my };
-      }
-      updateSelInfo(); redraw(true);
-      break;
+  if (tool === "select") {
+    const hit = hitTest(w);
+    if (hit) {
+      if (e.shiftKey) { selection.has(hit.id) ? selection.delete(hit.id) : selection.add(hit.id); }
+      else if (!selection.has(hit.id)) { selection.clear(); selection.add(hit.id); }
+      moveDrag = { lastW: w, moved: false };
+    } else {
+      if (!e.shiftKey) selection.clear();
+      marquee = { x1: mx, y1: my, x2: mx, y2: my };
     }
+    updateSelInfo(); redraw(true);
+  } else {
+    drawingClick(w);
+  }
+  redraw();
+});
+// 繪圖工具的落點邏輯(滑鼠與觸控共用)
+function drawingClick(w) {
+  switch (tool) {
     case "line":
       pts.push(w);
       if (pts.length === 2) { addEntity({ type: "line", x1: pts[0].x, y1: pts[0].y, x2: pts[1].x, y2: pts[1].y }); pts = [pts[1]]; }
@@ -755,7 +788,8 @@ cv.addEventListener("mousedown", e => {
       break;
   }
   redraw();
-});
+  updateTouchBar();
+}
 cv.addEventListener("mousemove", e => {
   const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
   cursorS = { x: mx, y: my };
@@ -809,18 +843,180 @@ cv.addEventListener("wheel", e => {
   view.ty = my + w.y * view.scale;
   redraw();
 }, { passive: false });
-cv.addEventListener("dblclick", e => {
-  if (tool !== "select") return;
-  const r = cv.getBoundingClientRect();
-  const w = s2w(e.clientX - r.left, e.clientY - r.top);
+function editTextAt(w) { // 雙擊/雙點文字進入編輯(滑鼠與觸控共用)
   const hit = hitTest(w);
   if (hit && hit.type === "text") {
     const s = w2s({ x: hit.x, y: hit.y });
     floatInput(s.x, s.y - 30, hit.str, str => {
       if (str.trim()) { snapshot(); hit.str = str.trim(); bbInvalidate(hit); bumpRev(); redraw(true); autosave(); }
     });
+    return true;
   }
+  return false;
+}
+cv.addEventListener("dblclick", e => {
+  if (tool !== "select") return;
+  const r = cv.getBoundingClientRect();
+  editTextAt(s2w(e.clientX - r.left, e.clientY - r.top));
 });
+
+// ─── 觸控支援(手機/平板):單指點=下點/選取,單指拖=平移(拖已選=移動),雙指=縮放平移,長按=取消/結束 ───
+const touchPts = new Map();
+let touchState = null, lastTap = { t: 0, x: 0, y: 0 }, lastPointerType = "mouse";
+const TOUCH_TOL = 18; // 手指鎖點容差(px)
+cv.addEventListener("pointerdown", e => {
+  lastPointerType = e.pointerType;
+  if (e.pointerType !== "touch") return;
+  e.preventDefault(); // 抑制相容性滑鼠事件,避免雙重觸發
+  hideFloat();
+  const r = cv.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  touchPts.set(e.pointerId, { x: mx, y: my });
+  if (touchPts.size === 1) {
+    if (touchState) clearTimeout(touchState.lp);
+    touchState = { mode: "tap", startX: mx, startY: my, lastX: mx, lastY: my };
+    touchState.lp = setTimeout(() => { if (touchState) { touchState.mode = "done"; cancelTool(); updateTouchBar(); } }, 550);
+    if (tool === "select") {
+      const hit = hitTest(s2w(mx, my));
+      if (hit && selection.has(hit.id)) touchState.hit = hit; // 按在已選物件上 → 拖曳移動
+    }
+  } else if (touchPts.size === 2) {
+    if (touchState) clearTimeout(touchState.lp);
+    const [a, b] = [...touchPts.values()];
+    touchState = {
+      mode: "pinch", d0: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+      cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2,
+      scale0: view.scale, tx0: view.tx, ty0: view.ty,
+    };
+  }
+}, { passive: false });
+cv.addEventListener("pointermove", e => {
+  if (e.pointerType !== "touch" || !touchPts.has(e.pointerId)) return;
+  e.preventDefault();
+  const r = cv.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  touchPts.set(e.pointerId, { x: mx, y: my });
+  if (!touchState) return;
+  if (touchState.mode === "pinch" && touchPts.size >= 2) {
+    const [a, b] = [...touchPts.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    const ns = Math.min(1e4, Math.max(1e-5, touchState.scale0 * d / touchState.d0));
+    const k = ns / touchState.scale0;
+    const ncx = (a.x + b.x) / 2, ncy = (a.y + b.y) / 2;
+    view.scale = ns;
+    view.tx = ncx - (touchState.cx - touchState.tx0) * k;
+    view.ty = ncy - (touchState.cy - touchState.ty0) * k;
+    redraw();
+    return;
+  }
+  if (touchState.mode === "tap" && Math.hypot(mx - touchState.startX, my - touchState.startY) > 12) {
+    clearTimeout(touchState.lp);
+    if (touchState.hit) {
+      touchState.mode = "move";
+      moveDrag = { lastW: getSnap(touchState.startX, touchState.startY, TOUCH_TOL), moved: false };
+    } else if (pts.length) {
+      touchState.mode = "rubber"; // 繪製中拖曳 = 調整橡皮筋方向(供「長度」輸入用)
+    } else {
+      touchState.mode = "pan";
+    }
+  }
+  const dx = mx - touchState.lastX, dy = my - touchState.lastY;
+  if (touchState.mode === "pan") { view.tx += dx; view.ty += dy; redraw(); }
+  else if (touchState.mode === "move" && moveDrag && selection.size) {
+    const w = getSnap(mx, my, TOUCH_TOL);
+    const ddx = w.x - moveDrag.lastW.x, ddy = w.y - moveDrag.lastW.y;
+    if (ddx || ddy) {
+      if (!moveDrag.moved) { snapshot(); moveDrag.moved = true; }
+      for (const e2 of doc.entities) if (selection.has(e2.id)) translateEntity(e2, ddx, ddy);
+      moveDrag.lastW = w;
+      redraw(true);
+    }
+  } else if (touchState.mode === "rubber" && pts.length) {
+    cursorW = applyOrtho(getSnap(mx, my, TOUCH_TOL), pts[pts.length - 1]);
+    cursorS = { x: mx, y: my };
+    $("coords").textContent = `${fmt(cursorW.x)}, ${fmt(cursorW.y)} mm`;
+    redraw();
+  }
+  touchState.lastX = mx; touchState.lastY = my;
+}, { passive: false });
+function touchEnd(e) {
+  if (e.pointerType !== "touch") return;
+  touchPts.delete(e.pointerId);
+  if (!touchState) return;
+  clearTimeout(touchState.lp);
+  if (touchState.mode === "pinch") {
+    if (touchPts.size === 1) {
+      const [a] = [...touchPts.values()];
+      touchState = { mode: "pan", startX: a.x, startY: a.y, lastX: a.x, lastY: a.y };
+    } else if (!touchPts.size) { touchState = null; redraw(); }
+    return;
+  }
+  if (touchState.mode === "move") {
+    if (moveDrag && moveDrag.moved) { bumpRev(); redraw(true); autosave(); }
+    moveDrag = null; updateSelInfo();
+  } else if (touchState.mode === "tap" && e.type === "pointerup") {
+    touchTap(touchState.lastX, touchState.lastY);
+  }
+  touchState = null;
+  updateTouchBar();
+}
+cv.addEventListener("pointerup", touchEnd);
+cv.addEventListener("pointercancel", touchEnd);
+function touchTap(mx, my) {
+  const now = Date.now();
+  const w0 = s2w(mx, my);
+  if (tool === "select") {
+    if (now - lastTap.t < 350 && Math.hypot(mx - lastTap.x, my - lastTap.y) < 28 && editTextAt(w0)) {
+      lastTap = { t: 0, x: 0, y: 0 }; return;
+    }
+    const hit = hitTest(w0);
+    if (hit) {
+      if (selection.has(hit.id)) selection.delete(hit.id);
+      else { selection.clear(); selection.add(hit.id); }
+    } else selection.clear();
+    updateSelInfo(); redraw(true);
+  } else {
+    let w = getSnap(mx, my, TOUCH_TOL);
+    w = applyOrtho(w, pts.length ? pts[pts.length - 1] : null);
+    cursorW = w; cursorS = { x: mx, y: my };
+    drawingClick(w);
+  }
+  lastTap = { t: now, x: mx, y: my };
+}
+function updateTouchBar() {
+  const show = lastPointerType === "touch" && pts.length > 0;
+  $("touchBar").style.display = show ? "flex" : "none";
+  if (show) {
+    $("tbLen").style.display = ["line", "poly", "circle"].includes(tool) ? "" : "none";
+    $("tbDone").style.display = (tool === "poly" && pts.length >= 2) || tool === "line" ? "" : "none";
+  }
+}
+$("tbDone").onclick = () => {
+  if (tool === "poly") finishPoly(false);
+  else { pts = []; redraw(); }
+  updateTouchBar();
+};
+$("tbCancel").onclick = () => { cancelTool(); updateTouchBar(); };
+$("tbLen").onclick = () => {
+  if (!pts.length) return;
+  floatInput(cv._w / 2 - 75, cv._h - 140, "", val => {
+    const d = parseFloat(val);
+    if (!(d > 0)) return;
+    const last = pts[pts.length - 1];
+    if (tool === "circle") { addEntity({ type: "circle", cx: last.x, cy: last.y, r: d }); pts = []; }
+    else {
+      let dx = cursorW.x - last.x, dy = cursorW.y - last.y;
+      if (!dx && !dy) dx = 1; // 沒拖過方向時預設向右
+      const L = Math.hypot(dx, dy);
+      const np = { x: last.x + dx / L * d, y: last.y + dy / L * d };
+      if (tool === "line") { addEntity({ type: "line", x1: last.x, y1: last.y, x2: np.x, y2: np.y }); pts = [np]; }
+      else pts.push(np);
+      redraw();
+    }
+    updateTouchBar();
+  }, true);
+};
+$("btnPanel").onclick = () => $("side").classList.toggle("open");
 
 // 鍵盤
 window.addEventListener("keydown", e => {
@@ -989,26 +1185,43 @@ function maxId(list) { // 不可用 Math.max(...list):數十萬個參數會堆�
   for (const e of list) if (e.id > m) m = e.id;
   return m;
 }
+function applyLoadedDoc(o, label) {
+  try {
+    snapshot();
+    doc = o;
+    doc.settings = doc.settings || { textH: 3.5, dimH: 3.5 };
+    currentLayer = doc.layers[0].name;
+    idSeq = maxId(doc.entities) + 1;
+    selection.clear(); bumpRev(); syncSettingsUI(); renderLayers(); zoomExtents(); autosave();
+    toast("已開啟:" + label + "(" + doc.entities.length + " 個圖元)", 4500);
+  } catch (err) {
+    console.error(err);
+    toast("開啟時發生錯誤:" + (err && err.message ? err.message : err), 6000);
+  }
+}
 function openFile(file) {
   const rd = new FileReader();
+  if (/\.dxf$/i.test(file.name || "")) { // DXF 直接開(手機免轉檔)
+    if (file.size > 120 * 1024 * 1024) { toast("DXF 超過 120MB,瀏覽器吃不下 — 請在電腦用拖曳轉檔做成 .json", 7000); return; }
+    toast("解析 DXF 中…(大檔要幾十秒)", 8000);
+    rd.onload = () => {
+      setTimeout(() => { // 讓 toast 先畫出來
+        try {
+          const res = dxfToDoc(rd.result);
+          applyLoadedDoc(res.doc, file.name + (res.skipped ? `,略過 ${res.skipped} 個不支援物件` : ""));
+        } catch (err) { console.error(err); toast("DXF 解析失敗:" + (err && err.message ? err.message : err), 7000); }
+      }, 50);
+    };
+    rd.readAsArrayBuffer(file);
+    return;
+  }
   rd.onload = () => {
     let o;
     try {
       o = JSON.parse(rd.result);
       if (!Array.isArray(o.entities) || !Array.isArray(o.layers) || !o.layers.length) throw 0;
-    } catch { toast("檔案格式錯誤,無法開啟(要選 .json 專案檔,不是 DWG/DXF)"); return; }
-    try {
-      snapshot();
-      doc = o;
-      doc.settings = doc.settings || { textH: 3.5, dimH: 3.5 };
-      currentLayer = doc.layers[0].name;
-      idSeq = maxId(doc.entities) + 1;
-      selection.clear(); bumpRev(); syncSettingsUI(); renderLayers(); zoomExtents(); autosave();
-      toast("已開啟:" + file.name + "(" + doc.entities.length + " 個圖元)");
-    } catch (err) {
-      console.error(err);
-      toast("開啟時發生錯誤:" + (err && err.message ? err.message : err), 6000);
-    }
+    } catch { toast("檔案格式錯誤,無法開啟(支援 .json 專案檔與 .dxf)"); return; }
+    applyLoadedDoc(o, file.name);
   };
   rd.readAsText(file);
 }
@@ -1034,6 +1247,282 @@ function loadAutosave() {
     idSeq = maxId(doc.entities) + 1;
     return doc.entities.length > 0;
   } catch { return false; }
+}
+
+// ─── DXF 匯入(瀏覽器內解析,手機免轉檔;DWG 仍需在電腦轉一次) ───
+function aciHex2(c) { // ACI 色號 → 近似 hex
+  const base = { 1: "#ff0000", 2: "#ffff00", 3: "#00ff00", 4: "#00ffff", 5: "#0000ff", 6: "#ff00ff", 7: "#e8e8e8", 8: "#808080", 9: "#c0c0c0" };
+  if (base[c]) return base[c];
+  if (c >= 250 && c <= 255) { const v = Math.round(51 + (c - 250) * 40); return "#" + (v << 16 | v << 8 | v).toString(16).padStart(6, "0"); }
+  if (c >= 10 && c <= 249) {
+    const hue = Math.floor((c - 10) / 10) * 15, idx = (c - 10) % 10;
+    const l = [0.5, 0.68, 0.42, 0.6, 0.34, 0.52, 0.28, 0.45, 0.22, 0.38][idx];
+    const s = idx % 2 ? 0.45 : 0.95;
+    const a = s * Math.min(l, 1 - l);
+    const f = n => { const k = (n + hue / 30) % 12; const v = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1); return Math.round(v * 255); };
+    return "#" + (f(0) << 16 | f(8) << 8 | f(4)).toString(16).padStart(6, "0");
+  }
+  return "#e8e8e8";
+}
+function dxfToDoc(buf) {
+  // 編碼:AC1021(2007)以上規格強制 UTF-8;更舊的才看 $DWGCODEPAGE(常見 Big5/GBK)
+  let text = new TextDecoder("utf-8").decode(buf);
+  const head = text.slice(0, 20000);
+  const verm = /\$ACADVER[\r\n]+\s*1[\r\n]+\s*AC(\d{4})/i.exec(head);
+  const isUtf8Ver = verm && parseInt(verm[1], 10) >= 1021;
+  const cpm = /\$DWGCODEPAGE[\r\n]+\s*3[\r\n]+\s*([^\r\n]+)/i.exec(head);
+  if (!isUtf8Ver && cpm) {
+    const enc = { ANSI_950: "big5", ANSI_936: "gbk", ANSI_932: "shift_jis", ANSI_949: "euc-kr" }[cpm[1].trim().toUpperCase()];
+    if (enc) { try { text = new TextDecoder(enc).decode(buf); } catch { } }
+  }
+  const L = text.split(/\r\n|\n|\r/);
+  text = null;
+  let pos = 0;
+  const deU = s => s.replace(/\\U\+([0-9A-Fa-f]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+  const mplain = s => deU(s).replace(/\\P/g, " ").replace(/\\[A-Za-z][^;\\{}]*;/g, "").replace(/[{}]/g, "");
+
+  function readRaw(type) { // 讀一個實體的所有碼(保留順序供 LWPOLYLINE bulge 對位)
+    const c = new Map(), seq = [];
+    while (pos + 1 < L.length) {
+      const code = parseInt(L[pos], 10);
+      if (code === 0) break;
+      const v = L[pos + 1]; pos += 2;
+      let a = c.get(code); if (!a) c.set(code, a = []);
+      a.push(v); seq.push([code, v]);
+    }
+    return { t: type, c, seq };
+  }
+  const g = (r, code, d) => r.c.has(code) ? parseFloat(r.c.get(code)[0]) : d;
+  const gs = (r, code, d) => r.c.has(code) ? r.c.get(code)[0] : d;
+
+  // ── 掃描全檔:圖層表、圖塊、模型空間實體 ──
+  const layerRows = [], blocks = new Map(), raws = [];
+  let section = "";
+  while (pos + 1 < L.length) {
+    const code = parseInt(L[pos], 10), v = (L[pos + 1] || "").trim(); pos += 2;
+    if (code !== 0) continue;
+    if (v === "SECTION") { const p = (L[pos + 1] || "").trim(); pos += 2; section = p; continue; }
+    if (v === "ENDSEC") { section = ""; continue; }
+    if (v === "EOF") break;
+    if (section === "TABLES" && v === "LAYER") {
+      const r = readRaw("LAYER");
+      const nm = deU(gs(r, 2, ""));
+      if (nm) {
+        const col = g(r, 62, 7), fl = g(r, 70, 0);
+        layerRows.push({ name: nm, color: aciHex2(Math.abs(col) || 7), visible: col >= 0 && !(fl & 1), locked: !!(fl & 4) });
+      }
+    } else if (section === "BLOCKS" && v === "BLOCK") {
+      const h = readRaw("BLOCK");
+      const blk = { base: [g(h, 10, 0), g(h, 20, 0)], ents: [] };
+      while (pos + 1 < L.length) {
+        const c2 = parseInt(L[pos], 10), v2 = (L[pos + 1] || "").trim();
+        pos += 2;
+        if (c2 === 0 && v2 === "ENDBLK") { readRaw("ENDBLK"); break; }
+        if (c2 === 0) blk.ents.push(readRaw(v2));
+      }
+      const bn = gs(h, 2, "");
+      if (bn) blocks.set(bn, blk);
+    } else if (section === "ENTITIES") {
+      raws.push(readRaw(v));
+    }
+  }
+
+  // ── 轉換(含仿射變換,供 INSERT/DIMENSION 圖塊展開) ──
+  const M0 = [1, 0, 0, 1, 0, 0]; // x'=a x+c y+e ; y'=b x+d y+f
+  const mmul = (m, n) => [
+    m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1],
+    m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
+    m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
+  const ap = (M, x, y) => [M[0] * x + M[2] * y + M[4], M[1] * x + M[3] * y + M[5]];
+  const uni = M => Math.abs(Math.hypot(M[0], M[1]) - Math.hypot(M[2], M[3])) < 1e-6 && (M[0] * M[3] - M[1] * M[2]) > 0;
+  const mSc = M => Math.hypot(M[0], M[1]) || 1;
+  const mRot = M => Math.atan2(M[1], M[0]);
+
+  const out = [];
+  let skipped = 0;
+  const MAXE = 300000;
+  function emit(ent, layer) {
+    if (out.length >= MAXE) { skipped++; return; }
+    ent.id = out.length + 1; ent.layer = layer;
+    out.push(ent);
+  }
+  function bulgeChain(vs) { // [[x,y,bulge],...] → 展平後點列
+    const p = [[vs[0][0], vs[0][1]]];
+    for (let i = 0; i < vs.length - 1; i++) p.push(...bulgeSeg(vs[i], vs[i + 1]));
+    return p;
+  }
+  function bulgeSeg(a, b) {
+    const bg = a[2] || 0;
+    if (!bg) return [[b[0], b[1]]];
+    const th = 4 * Math.atan(bg);
+    const chord = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (chord < 1e-12) return [[b[0], b[1]]];
+    const r = chord / (2 * Math.sin(th / 2)); // 有號
+    const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+    const nx = -(b[1] - a[1]) / chord, ny = (b[0] - a[0]) / chord;
+    const h = r * Math.cos(th / 2);
+    const cx = mx - nx * h, cy = my - ny * h;
+    const a1 = Math.atan2(a[1] - cy, a[0] - cx);
+    const n = Math.max(4, Math.ceil(Math.abs(th) / (Math.PI / 24)));
+    const seg = [];
+    for (let i = 1; i <= n; i++) {
+      const t = a1 + th * i / n;
+      seg.push([cx + Math.abs(r) * Math.cos(t), cy + Math.abs(r) * Math.sin(t)]);
+    }
+    seg[seg.length - 1] = [b[0], b[1]];
+    return seg;
+  }
+  function tessArcPts(cx, cy, r, a1, sweep) {
+    const n = Math.max(8, Math.ceil(Math.abs(sweep) / (Math.PI / 32)));
+    const p = [];
+    for (let i = 0; i <= n; i++) { const t = a1 + sweep * i / n; p.push([cx + r * Math.cos(t), cy + r * Math.sin(t)]); }
+    return p;
+  }
+  const lay = (r, parentLayer) => {
+    const nm = deU(gs(r, 8, "0"));
+    return (nm === "0" && parentLayer) ? parentLayer : nm; // 圖塊內 0 層繼承插入層
+  };
+  function convRaw(r, Min, parentLayer, depth) {
+    const ly = lay(r, parentLayer);
+    // OCS:擠出方向 230=-1 時,該實體所有座標繞 Y 軸鏡射(x → -x)
+    const M = (g(r, 230, 1) < 0) ? mmul(Min, [-1, 0, 0, 1, 0, 0]) : Min;
+    switch (r.t) {
+      case "LINE": {
+        const p = ap(M, g(r, 10, 0), g(r, 20, 0)), q = ap(M, g(r, 11, 0), g(r, 21, 0));
+        emit({ type: "line", x1: p[0], y1: p[1], x2: q[0], y2: q[1] }, ly);
+        break;
+      }
+      case "CIRCLE": {
+        const x = g(r, 10, 0), y = g(r, 20, 0), rr = g(r, 40, 0);
+        if (uni(M)) { const p = ap(M, x, y); emit({ type: "circle", cx: p[0], cy: p[1], r: rr * mSc(M) }, ly); }
+        else { const pts2 = tessArcPts(x, y, rr, 0, Math.PI * 2).map(q => ap(M, q[0], q[1])); emit({ type: "poly", pts: pts2, closed: true }, ly); }
+        break;
+      }
+      case "ARC": {
+        const x = g(r, 10, 0), y = g(r, 20, 0), rr = g(r, 40, 0);
+        const a1 = g(r, 50, 0) * Math.PI / 180, a2 = g(r, 51, 0) * Math.PI / 180;
+        if (uni(M)) {
+          const p = ap(M, x, y), rot = mRot(M);
+          emit({ type: "arc", cx: p[0], cy: p[1], r: rr * mSc(M), a1: a1 + rot, a2: a2 + rot }, ly);
+        } else {
+          const sweep = norm2pi(a2 - a1) || 2 * Math.PI;
+          emit({ type: "poly", pts: tessArcPts(x, y, rr, a1, sweep).map(q => ap(M, q[0], q[1])), closed: false }, ly);
+        }
+        break;
+      }
+      case "LWPOLYLINE": {
+        const vs = []; let cur = null;
+        for (const [c2, v2] of r.seq) {
+          if (c2 === 10) { cur = [parseFloat(v2), 0, 0]; vs.push(cur); }
+          else if (c2 === 20 && cur) cur[1] = parseFloat(v2);
+          else if (c2 === 42 && cur) cur[2] = parseFloat(v2);
+        }
+        if (vs.length >= 2) {
+          const closed = (g(r, 70, 0) & 1) === 1;
+          const src = closed ? [...vs, vs[0]] : vs;
+          const flat = bulgeChain(src).map(q => ap(M, q[0], q[1]));
+          if (closed) flat.pop();
+          if (flat.length >= 2) emit({ type: "poly", pts: flat, closed }, ly);
+        }
+        break;
+      }
+      case "SOLID": case "TRACE": {
+        const p = c2 => ap(M, g(r, c2, 0), g(r, c2 + 10, 0));
+        emit({ type: "poly", pts: [p(10), p(11), p(13), p(12)], closed: true }, ly);
+        break;
+      }
+      case "TEXT": case "ATTRIB": {
+        const s = deU(gs(r, 1, "")).trim();
+        if (s) { const p = ap(M, g(r, 10, 0), g(r, 20, 0)); emit({ type: "text", x: p[0], y: p[1], h: (g(r, 40, 3.5) || 3.5) * mSc(M), str: s }, ly); }
+        break;
+      }
+      case "MTEXT": {
+        const s = mplain((r.c.get(3) || []).join("") + gs(r, 1, "")).trim();
+        if (s) { const p = ap(M, g(r, 10, 0), g(r, 20, 0)); emit({ type: "text", x: p[0], y: p[1], h: (g(r, 40, 3.5) || 3.5) * mSc(M), str: s.slice(0, 200) }, ly); }
+        break;
+      }
+      case "ELLIPSE": {
+        const cx = g(r, 10, 0), cy = g(r, 20, 0), mxa = g(r, 11, 1), mya = g(r, 21, 0), ratio = g(r, 40, 1);
+        const t1 = g(r, 41, 0), t2v = g(r, 42, Math.PI * 2);
+        const sweep = (t2v - t1) || Math.PI * 2;
+        const n = 64, pts2 = [];
+        for (let i = 0; i <= n; i++) {
+          const t = t1 + sweep * i / n;
+          const x = cx + Math.cos(t) * mxa - Math.sin(t) * ratio * mya;
+          const y = cy + Math.cos(t) * mya + Math.sin(t) * ratio * mxa;
+          pts2.push(ap(M, x, y));
+        }
+        emit({ type: "poly", pts: pts2, closed: Math.abs(sweep - Math.PI * 2) < 1e-6 }, ly);
+        break;
+      }
+      case "SPLINE": {
+        const use = r.c.has(11) ? [11, 21] : [10, 20]; // 優先擬合點,退而求其次控制點(近似)
+        const xs = (r.c.get(use[0]) || []).map(v => parseFloat(v));
+        const ys = (r.c.get(use[1]) || []).map(v => parseFloat(v));
+        const pts2 = xs.map((x, i) => ap(M, x, ys[i] || 0));
+        if (pts2.length >= 2) emit({ type: "poly", pts: pts2, closed: (g(r, 70, 0) & 1) === 1 }, ly);
+        break;
+      }
+      case "POLYLINE": r._pl = { vs: [], closed: (g(r, 70, 0) & 1) === 1, ly }; return r._pl; // 由呼叫端收 VERTEX
+      case "INSERT": case "DIMENSION": {
+        if (depth >= 8) { skipped++; break; }
+        const bn = gs(r, 2, "");
+        const blk = blocks.get(bn);
+        if (!blk) { skipped++; break; }
+        let Mi = M0;
+        if (r.t === "INSERT") {
+          const ix = g(r, 10, 0), iy = g(r, 20, 0), sx = g(r, 41, 1) || 1, sy = g(r, 42, 1) || 1;
+          const rot = g(r, 50, 0) * Math.PI / 180, co = Math.cos(rot), si = Math.sin(rot);
+          const RS = [co * sx, si * sx, -si * sy, co * sy];
+          Mi = [RS[0], RS[1], RS[2], RS[3],
+            ix - (RS[0] * blk.base[0] + RS[2] * blk.base[1]),
+            iy - (RS[1] * blk.base[0] + RS[3] * blk.base[1])];
+        } // DIMENSION 的幾何圖塊已是世界座標,用原變換
+        convList(blk.ents, mmul(M, Mi), ly, depth + 1);
+        break;
+      }
+      case "POINT": case "HATCH": case "IMAGE": case "WIPEOUT": case "VIEWPORT":
+      case "ATTDEF": case "SEQEND": case "VERTEX": case "3DFACE": case "REGION": case "BODY":
+        skipped++; break;
+      default: skipped++;
+    }
+    return null;
+  }
+  function convList(list, M, parentLayer, depth) {
+    let pl = null;
+    for (const r of list) {
+      if (pl) { // POLYLINE 模式:收 VERTEX 到 SEQEND
+        if (r.t === "VERTEX") { pl.vs.push([g(r, 10, 0), g(r, 20, 0), g(r, 42, 0)]); continue; }
+        if (r.t === "SEQEND") {
+          if (pl.vs.length >= 2) {
+            const src = pl.closed ? [...pl.vs, pl.vs[0]] : pl.vs;
+            const flat = bulgeChain(src).map(q => ap(M, q[0], q[1]));
+            if (pl.closed) flat.pop();
+            if (flat.length >= 2) emit({ type: "poly", pts: flat, closed: pl.closed }, pl.ly);
+          }
+          pl = null; continue;
+        }
+        pl = null; // 不正常結尾,照常處理本實體
+      }
+      const res = convRaw(r, M, parentLayer, depth);
+      if (res) pl = res;
+    }
+  }
+  convList(raws, M0, null, 0);
+
+  // ── 組 doc:補上實體用到但表裡沒有的圖層 ──
+  const layMap = new Map(layerRows.map(l => [l.name, l]));
+  for (const e of out) if (!layMap.has(e.layer)) {
+    const l = { name: e.layer, color: "#e8e8e8", visible: true, locked: false };
+    layMap.set(e.layer, l); layerRows.push(l);
+  }
+  if (!layerRows.length) layerRows.push({ name: "0", color: "#e8e8e8", visible: true, locked: false });
+  for (const l of layerRows) l.locked = false; // 匯入後全部解鎖,避免「看得到點不到」
+  if (out.length >= MAXE) toast(`圖太大,已達 ${MAXE} 圖元上限,後面的被截掉`, 7000);
+  return {
+    doc: { version: 1, units: "mm", layers: layerRows, entities: out, settings: { textH: 3.5, dimH: 3.5 } },
+    skipped,
+  };
 }
 
 // ─── SVG 匯出(檔案與列印共用) ─────────────────────────
