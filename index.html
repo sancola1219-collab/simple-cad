@@ -73,6 +73,16 @@ button.primary:hover{background:#3182ce;}
 #previewWrap{flex:1; background:#555; border-radius:4px; display:flex; align-items:center; justify-content:center; overflow:auto; padding:12px;}
 #previewWrap svg{background:#fff; box-shadow:0 2px 14px #0008;}
 
+/* ── 3D 檢視 ── */
+#threeModal{position:fixed; inset:0; background:#14161a; display:none; z-index:60;}
+#cv3{position:absolute; inset:0; width:100%; height:100%; touch-action:none; cursor:grab;}
+#threeCtrl{position:absolute; top:0; left:0; right:0; display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+  padding:8px 12px; background:#1e2126dd; border-bottom:1px solid var(--border);}
+#threeCtrl label{display:flex; align-items:center; gap:6px; color:var(--dim);}
+#threeCtrl input{background:var(--panel2); border:1px solid var(--border); color:var(--fg); padding:4px 6px; border-radius:4px;}
+#threeCtrl .hint3d{color:var(--dim); font-size:12px;}
+#threeCtrl button:last-child{margin-left:auto;}
+
 /* ── 手機/窄螢幕 ── */
 @media (max-width: 820px){
   .mobile-only{display:inline-block;}
@@ -117,6 +127,7 @@ button.primary:hover{background:#3182ce;}
     <button id="btnRedo">↪ 重做</button>
     <span class="sep"></span>
     <button id="btnZoomExt">縮放全圖</button>
+    <button id="btn3d">3D</button>
     <span class="sep"></span>
     <button id="btnPdf" class="primary">匯出 PDF</button>
     <button id="btnSvg" class="desktop-only">SVG</button>
@@ -207,6 +218,17 @@ button.primary:hover{background:#3182ce;}
       </div>
       <div id="previewWrap"></div>
     </div>
+  </div>
+</div>
+
+<div id="threeModal">
+  <canvas id="cv3"></canvas>
+  <div id="threeCtrl">
+    <span style="font-weight:bold;color:var(--acc)">3D 檢視</span>
+    <label>預設高度 <input type="number" id="in3dH" value="3000" min="0" step="100" style="width:70px"> mm</label>
+    <span class="hint3d">拖曳=旋轉;滾輪/雙指=縮放;Shift+拖或雙指移=平移</span>
+    <button id="btn3dPng">存成圖片</button>
+    <button id="btnClose3d">✕ 關閉</button>
   </div>
 </div>
 
@@ -1118,7 +1140,21 @@ function updateSelInfo() {
     if (e.type === "circle") html += `<br>半徑 ${fmt(e.r)} mm`;
     if (e.type === "text") html += `<br>「${e.str}」`;
   }
+  // 3D 高度(套用到所有選取的幾何物件)
+  const cur = sel.find(e => e.h3d != null);
+  html += `<br><label style="display:flex;align-items:center;gap:4px;margin-top:4px">3D高度
+    <input type="number" id="inSelH3d" min="0" step="100" style="width:64px" value="${cur ? cur.h3d : ""}"
+      placeholder="預設"> mm <button id="btnSelH3d" style="padding:2px 8px">套用</button></label>`;
   $("selInfo").innerHTML = html;
+  $("btnSelH3d").onclick = () => {
+    const v = $("inSelH3d").value.trim();
+    snapshot();
+    for (const e of doc.entities) if (selection.has(e.id)) {
+      if (v === "") delete e.h3d; else e.h3d = parseFloat(v) || 0;
+    }
+    autosave();
+    toast(v === "" ? "已恢復用預設高度" : `已設定 3D 高度 ${v} mm(按「3D」檢視)`);
+  };
 }
 
 // ─── 圖層 ───────────────────────────────────────────────
@@ -2213,6 +2249,172 @@ $("btnAutoH").onclick = () => {
 };
 ["chkGrid", "chkSnapGrid", "chkOsnap", "chkOrtho"].forEach(id => $(id).onchange = () => redraw(true));
 
+// ─── 3D 檢視(2.5D 擠出線框,軸測投影,零相依) ─────────
+const cv3 = $("cv3"), ctx3 = cv3.getContext("2d");
+const T3 = { th: -0.6, ph: 1.0, s: 1, panX: 0, panY: 0, cx: 0, cy: 0, open: false };
+const MAX_3D_ENTS = 60000;
+function h3dOf(e) { // 物件的擠出高度:自訂優先,否則預設;文字/標註永遠平面
+  if (e.type === "text" || e.type === "dim") return 0;
+  return e.h3d != null ? e.h3d : (parseFloat($("in3dH").value) || 0);
+}
+function open3d() {
+  if (!visibleEntities().length) { toast("圖是空的,先畫一些東西"); return; }
+  $("threeModal").style.display = "block";
+  T3.open = true;
+  const r = cv3.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  cv3.width = r.width * dpr; cv3.height = r.height * dpr;
+  ctx3.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cv3._w = r.width; cv3._h = r.height;
+  const b = extents();
+  T3.cx = (b.minx + b.maxx) / 2; T3.cy = (b.miny + b.maxy) / 2;
+  const dim = Math.max(b.maxx - b.minx, b.maxy - b.miny) || 100;
+  T3.s = Math.min(cv3._w, cv3._h) * 0.62 / dim;
+  T3.th = -0.6; T3.ph = 1.0; T3.panX = 0; T3.panY = 40;
+  render3d();
+}
+function close3d() { $("threeModal").style.display = "none"; T3.open = false; }
+function proj3(x, y, z) {
+  const c = Math.cos(T3.th), s = Math.sin(T3.th);
+  const xr = (x - T3.cx) * c - (y - T3.cy) * s;
+  const yr = (x - T3.cx) * s + (y - T3.cy) * c;
+  return [cv3._w / 2 + T3.panX + xr * T3.s,
+          cv3._h / 2 + T3.panY - (yr * Math.cos(T3.ph) + z * Math.sin(T3.ph)) * T3.s];
+}
+function render3d() { render3dTo(ctx3, cv3._w, cv3._h); }
+function render3dTo(c3, W3, H3) {
+  const oldW = cv3._w, oldH = cv3._h;
+  cv3._w = W3; cv3._h = H3; // proj3 以 cv3._w/_h 為中心
+  try { render3dBody(c3); } finally { cv3._w = oldW; cv3._h = oldH; }
+}
+function render3dBody(ctx3) {
+  ctx3.clearRect(0, 0, cv3._w, cv3._h);
+  ctx3.fillStyle = "#14161a"; ctx3.fillRect(0, 0, cv3._w, cv3._h);
+  const b = extents();
+  if (!b) return;
+  // 地面框
+  ctx3.strokeStyle = "#333a44"; ctx3.lineWidth = 1;
+  const g = [[b.minx, b.miny], [b.maxx, b.miny], [b.maxx, b.maxy], [b.minx, b.maxy]];
+  ctx3.beginPath();
+  g.forEach((p, i) => { const q = proj3(p[0], p[1], 0); i ? ctx3.lineTo(q[0], q[1]) : ctx3.moveTo(q[0], q[1]); });
+  ctx3.closePath(); ctx3.stroke();
+  const list = visibleEntities();
+  const n = Math.min(list.length, MAX_3D_ENTS);
+  ctx3.lineWidth = 1.1;
+  const seg3 = (x1, y1, x2, y2, z1, z2) => {
+    const a = proj3(x1, y1, z1), c2 = proj3(x2, y2, z2);
+    ctx3.moveTo(a[0], a[1]); ctx3.lineTo(c2[0], c2[1]);
+  };
+  const prism = (pts, closed, h) => { // 底邊+頂邊+立柱
+    const m = pts.length;
+    for (let i = 0; i < m - (closed ? 0 : 1); i++) {
+      const a = pts[i], c2 = pts[(i + 1) % m];
+      seg3(a[0], a[1], c2[0], c2[1], 0, 0);
+      if (h > 0) seg3(a[0], a[1], c2[0], c2[1], h, h);
+    }
+    if (h > 0) {
+      const step = Math.max(1, Math.floor(m / 8)); // 密集折線只畫部分立柱
+      for (let i = 0; i < m; i += step) seg3(pts[i][0], pts[i][1], pts[i][0], pts[i][1], 0, h);
+    }
+  };
+  for (let i = 0; i < n; i++) {
+    const e = list[i];
+    const col = layerOf(e).color;
+    ctx3.strokeStyle = col; ctx3.fillStyle = col;
+    const h = h3dOf(e);
+    ctx3.beginPath();
+    switch (e.type) {
+      case "line":
+        seg3(e.x1, e.y1, e.x2, e.y2, 0, 0);
+        if (h > 0) {
+          seg3(e.x1, e.y1, e.x2, e.y2, h, h);
+          seg3(e.x1, e.y1, e.x1, e.y1, 0, h);
+          seg3(e.x2, e.y2, e.x2, e.y2, 0, h);
+        }
+        break;
+      case "rect":
+        prism([[e.x, e.y], [e.x + e.w, e.y], [e.x + e.w, e.y + e.h], [e.x, e.y + e.h]], true, h);
+        break;
+      case "poly": prism(e.pts, e.closed, h); break;
+      case "circle": prism(tessArcPts(e.cx, e.cy, e.r, 0, Math.PI * 2).slice(0, -1), true, h); break;
+      case "arc": prism(tessArcPts(e.cx, e.cy, e.r, e.a1, norm2pi(e.a2 - e.a1) || Math.PI * 2), false, h); break;
+      case "text": {
+        const p = proj3(e.x, e.y, 0);
+        ctx3.font = Math.max(9, e.h * T3.s) + "px 'Microsoft JhengHei',sans-serif";
+        ctx3.fillText(e.str, p[0], p[1]);
+        break;
+      }
+      case "dim": {
+        const gm = dimPrimitives(e);
+        for (const s2 of gm.lines) seg3(s2[0].x, s2[0].y, s2[1].x, s2[1].y, 0, 0);
+        const p = proj3(gm.text.x, gm.text.y, 0);
+        ctx3.font = Math.max(9, gm.text.h * T3.s) + "px 'Microsoft JhengHei',sans-serif";
+        ctx3.fillText(gm.text.str, p[0], p[1]);
+        break;
+      }
+    }
+    ctx3.stroke();
+  }
+  if (list.length > n) {
+    ctx3.fillStyle = "#e06060"; ctx3.font = "13px sans-serif";
+    ctx3.fillText(`圖太大,只顯示前 ${n} 個圖元`, 12, cv3._h - 12);
+  }
+}
+// 3D 互動:拖=旋轉、Shift+拖/中鍵/雙指移=平移、滾輪/雙指=縮放
+let d3 = null;
+const t3pts = new Map();
+cv3.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  cv3.setPointerCapture(e.pointerId);
+  t3pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (t3pts.size === 2) {
+    const [a, b2] = [...t3pts.values()];
+    d3 = { mode: "pinch", d0: Math.hypot(a.x - b2.x, a.y - b2.y) || 1, s0: T3.s,
+           cx0: (a.x + b2.x) / 2, cy0: (a.y + b2.y) / 2, panX0: T3.panX, panY0: T3.panY };
+  } else {
+    d3 = { mode: (e.shiftKey || e.button === 1) ? "pan" : "orbit", x: e.clientX, y: e.clientY };
+  }
+});
+cv3.addEventListener("pointermove", e => {
+  if (!d3 || !t3pts.has(e.pointerId)) return;
+  e.preventDefault();
+  t3pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (d3.mode === "pinch" && t3pts.size >= 2) {
+    const [a, b2] = [...t3pts.values()];
+    const d = Math.hypot(a.x - b2.x, a.y - b2.y) || 1;
+    T3.s = Math.min(1e3, Math.max(1e-6, d3.s0 * d / d3.d0));
+    T3.panX = d3.panX0 + ((a.x + b2.x) / 2 - d3.cx0);
+    T3.panY = d3.panY0 + ((a.y + b2.y) / 2 - d3.cy0);
+    render3d(); return;
+  }
+  const dx = e.clientX - d3.x, dy = e.clientY - d3.y;
+  d3.x = e.clientX; d3.y = e.clientY;
+  if (d3.mode === "pan") { T3.panX += dx; T3.panY += dy; }
+  else { T3.th += dx * 0.008; T3.ph = Math.min(1.5, Math.max(0.08, T3.ph + dy * 0.006)); }
+  render3d();
+});
+function end3(e) { t3pts.delete(e.pointerId); if (t3pts.size < 2 && d3 && d3.mode === "pinch") d3 = null; if (!t3pts.size) d3 = null; }
+cv3.addEventListener("pointerup", end3);
+cv3.addEventListener("pointercancel", end3);
+cv3.addEventListener("wheel", e => {
+  e.preventDefault();
+  T3.s = Math.min(1e3, Math.max(1e-6, T3.s * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+  render3d();
+}, { passive: false });
+$("btn3d").onclick = open3d;
+$("btnClose3d").onclick = close3d;
+$("in3dH").oninput = () => { if (T3.open) render3d(); };
+$("btn3dPng").onclick = () => {
+  const c = document.createElement("canvas"); // 離屏重繪 2x,避開隱藏分頁 GPU 回讀問題
+  c.width = cv3._w * 2; c.height = cv3._h * 2;
+  const x = c.getContext("2d");
+  x.scale(2, 2);
+  render3dTo(x, cv3._w, cv3._h);
+  c.toBlob(bl => download(`3D視圖-${stamp()}.png`, bl), "image/png");
+  toast("已下載 3D 視圖 PNG");
+};
+window.addEventListener("keydown", e => { if (e.key === "Escape" && T3.open) close3d(); });
+
 // ─── 啟動 ───────────────────────────────────────────────
 window.addEventListener("resize", resizeCanvas);
 const restored = loadAutosave();
@@ -2227,6 +2429,7 @@ window.CAD = {
   get doc() { return doc; }, get view() { return view; }, get selection() { return selection; },
   addEntity, redraw, undo, redo, setTool, zoomExtents, extents,
   svgString, dxfString, dimPrimitives, hitTest, s2w, w2s, strokeEntity,
+  open3d, render3dTo, proj3, T3,
   setDoc(o) { doc = o; currentLayer = doc.layers[0].name; bumpRev(); renderLayers(); redraw(true); },
 };
 </script>
