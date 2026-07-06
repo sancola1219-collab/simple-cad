@@ -208,6 +208,20 @@ button.primary:hover{background:#3182ce;}
             <option value="100">1:100</option><option value="200">1:200</option>
           </select>
         </label>
+        <label>線寬
+          <select id="pLineW">
+            <option value="0.1">極細 0.1mm</option>
+            <option value="0.15" selected>細 0.15mm(建議)</option>
+            <option value="0.25">中 0.25mm</option>
+            <option value="0.35">粗 0.35mm</option>
+          </select>
+        </label>
+        <label>顏色
+          <select id="pColor">
+            <option value="color">維持彩色</option>
+            <option value="mono">全部黑色</option>
+          </select>
+        </label>
         <label class="chk"><input type="checkbox" id="pTitle" checked> 標題欄</label>
         <label>圖名 <input type="text" id="pName" value="未命名圖面"></label>
         <div style="color:var(--dim);font-size:12px;line-height:1.5">
@@ -1837,12 +1851,12 @@ function svgString(opts) {
     titleH = L.titleH;
     const scaleN = L.scaleN;
     vbW = L.vbW; vbH = L.vbH;
-    sw = 0.35 * scaleN; // 紙上約 0.35mm 線寬
+    sw = (o.lineW || 0.15) * scaleN; // 使用者指定的紙上線寬 mm
     var vbX = L.vbX;
     var vbY = L.vbY;
     var els = [];
     for (const e of visibleEntities()) {
-      const col = o.dark ? layerOf(e).color : printColor(layerOf(e).color);
+      const col = o.dark ? layerOf(e).color : printColor(layerOf(e).color, o.mono);
       els.push(svgEntity(e, p => [fmt(p.x), fmt(2 * dcy - p.y)], col, sw));
     }
     // y 翻轉:用 y' = 2*dcy - y(繞圖心翻轉,viewBox 不變)
@@ -1867,7 +1881,8 @@ function svgString(opts) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(dw)}mm" height="${fmt(dh)}mm" viewBox="0 0 ${fmt(dw)} ${fmt(dh)}">` +
     `<rect width="100%" height="100%" fill="#fff"/>` + els2.join("\n") + `</svg>`;
 }
-function printColor(c) { // 淺色圖層印在白紙上改深色
+function printColor(c, mono) { // 白紙上的印色:mono=全黑;否則淺色轉深、其餘保留
+  if (mono) return "#000000";
   const r = parseInt(c.slice(1, 3), 16), g = parseInt(c.slice(3, 5), 16), bl = parseInt(c.slice(5, 7), 16);
   const lum = 0.299 * r + 0.587 * g + 0.114 * bl;
   return lum > 190 ? "#000000" : c;
@@ -1979,6 +1994,8 @@ function printOpts() {
     paperH: land ? Math.min(pw, ph) : Math.max(pw, ph),
     margin: 10,
     scaleN: sv === "fit" ? null : parseFloat(sv),
+    lineW: parseFloat($("pLineW").value) || 0.15,   // 紙上線寬 mm
+    mono: $("pColor").value === "mono",              // 全部黑色
     title: $("pTitle").checked,
     name: $("pName").value,
     date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
@@ -2000,9 +2017,9 @@ function rasterPreview(o) {
   x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height);
   const vs = res / L.scaleN; // px / 世界mm
   const vw = { scale: vs, tx: -L.vbX * vs, ty: (L.vbY + L.vbH) * vs };
-  x.lineWidth = Math.max(0.6, 0.35 * res);
+  x.lineWidth = Math.max(0.5, (o.lineW || 0.15) * res);
   for (const e of visibleEntities()) {
-    const col = printColor(layerOf(e).color);
+    const col = printColor(layerOf(e).color, o.mono);
     x.strokeStyle = col; x.fillStyle = col;
     strokeEntity(x, e, vw);
   }
@@ -2046,7 +2063,7 @@ async function buildPdfBlob(o) {
   const X = wx => (wx - L.vbX) * k, Y = wy => (wy - L.vbY) * k;
   const f2 = v => String(Math.round(v * 100) / 100);
   const hex2rgb = h => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255].map(v => f2(v)).join(" ");
-  const ops = ["q", `0 0 ${f2(Wpt)} ${f2(Hpt)} re W n`, `${f2(0.35 * MM2PT)} w`, "1 J 1 j"];
+  const ops = ["q", `0 0 ${f2(Wpt)} ${f2(Hpt)} re W n`, `${f2((o.lineW || 0.15) * MM2PT)} w`, "1 J 1 j"];
 
   // 文字貼片:同字串+字高+顏色共用一張圖(XObject),不同位置重複引用
   const patches = new Map(); let patchSeq = 0;
@@ -2092,7 +2109,7 @@ async function buildPdfBlob(o) {
     ops.push(s + (fill ? "f" : (closed ? "s" : "S")));
   };
   for (const e of visibleEntities()) {
-    const col = printColor(layerOf(e).color);
+    const col = printColor(layerOf(e).color, o.mono);
     switch (e.type) {
       case "line": polyOp([[e.x1, e.y1], [e.x2, e.y2]], false, col); break;
       case "rect": polyOp([[e.x, e.y], [e.x + e.w, e.y], [e.x + e.w, e.y + e.h], [e.x, e.y + e.h]], true, col); break;
@@ -2186,7 +2203,7 @@ $("btnPdf").onclick = () => {
   refreshPreview();
 };
 $("btnClosePrint").onclick = () => $("printModal").style.display = "none";
-for (const id of ["pPaper", "pOrient", "pScale", "pTitle", "pName"]) $(id).addEventListener("input", refreshPreview);
+for (const id of ["pPaper", "pOrient", "pScale", "pLineW", "pColor", "pTitle", "pName"]) $(id).addEventListener("input", refreshPreview);
 $("btnDoPrint").onclick = () => {
   const n = visibleEntities().length;
   if (n > RASTER_PREVIEW_LIMIT) toast(`圖很大(${n} 個圖元),向量組版需 10~30 秒,請耐心等列印視窗出現…`, 12000);
