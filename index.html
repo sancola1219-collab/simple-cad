@@ -89,6 +89,10 @@ button.primary:hover{background:#3182ce;}
     transform:translateX(100%); transition:transform .18s; box-shadow:-6px 0 16px #000a;}
   #side.open{transform:none;}
   #status{font-size:11px; gap:8px;}
+  #printModal .dlg{max-height:96vh; width:96vw;}
+  #printModal .dlgBody{flex-direction:column; overflow-y:auto;}
+  #printOpts{width:100%;}
+  #previewWrap{min-height:220px;}
 }
 
 /* ── 實際列印 ── */
@@ -1759,6 +1763,24 @@ function svgEntity(e, tf, color, sw) {
   }
   return "";
 }
+function printLayout(o) { // 列印版面計算(SVG 與點陣預覽共用)
+  const b = extents();
+  if (!b) return null;
+  const pad = Math.max((b.maxx - b.minx), (b.maxy - b.miny)) * 0.03 + 2;
+  const dw = (b.maxx - b.minx) + pad * 2, dh = (b.maxy - b.miny) + pad * 2;
+  const dcx = (b.minx + b.maxx) / 2, dcy = (b.miny + b.maxy) / 2;
+  const m = o.margin != null ? o.margin : 10;
+  const titleH = o.title ? 16 : 0;
+  const pw = o.paperW - m * 2, ph = o.paperH - m * 2 - titleH;
+  let scaleN = o.scaleN; // 1mm 圖 = 1/scaleN mm 紙
+  if (!scaleN) scaleN = Math.max(dw / pw, dh / ph);
+  const vbW = o.paperW * scaleN, vbH = o.paperH * scaleN;
+  return {
+    scaleN, vbW, vbH, m, titleH, dcy,
+    vbX: dcx - vbW / 2,
+    vbY: dcy - vbH / 2 - (titleH / 2) * scaleN,
+  };
+}
 function svgString(opts) {
   // opts:{forPrint,paperW,paperH,margin,scaleN(null=fit),title,name,dark}
   const b = extents();
@@ -1771,15 +1793,13 @@ function svgString(opts) {
   if (o.forPrint) {
     W = o.paperW; H = o.paperH;
     const m = o.margin != null ? o.margin : 10;
-    titleH = o.title ? 16 : 0;
-    const pw = W - m * 2, ph = H - m * 2 - titleH;
-    let scaleN = o.scaleN; // 1mm 圖 = 1/scaleN mm 紙
-    if (!scaleN) scaleN = Math.max(dw / pw, dh / ph);
-    vbW = W * scaleN; vbH = H * scaleN;
+    const L = printLayout(o);
+    titleH = L.titleH;
+    const scaleN = L.scaleN;
+    vbW = L.vbW; vbH = L.vbH;
     sw = 0.35 * scaleN; // 紙上約 0.35mm 線寬
-    // viewBox 置中於圖面中心,並讓標題欄留白落在下方
-    var vbX = dcx - vbW / 2;
-    var vbY = dcy - vbH / 2 - (titleH / 2) * scaleN;
+    var vbX = L.vbX;
+    var vbY = L.vbY;
     var els = [];
     for (const e of visibleEntities()) {
       const col = o.dark ? layerOf(e).color : printColor(layerOf(e).color);
@@ -1924,18 +1944,53 @@ function printOpts() {
     date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
   };
 }
+const RASTER_PREVIEW_LIMIT = 30000; // 圖元超過此數,預覽改用點陣圖(向量預覽會凍結十幾秒)
+function rasterPreview(o) {
+  const L = printLayout(o);
+  if (!L) return null;
+  const wrap = $("previewWrap");
+  const k = Math.min((wrap.clientWidth - 24) / o.paperW, (wrap.clientHeight - 24) / o.paperH, 3);
+  const res = Math.min(2, 1600 / Math.max(o.paperW, o.paperH)) * 2; // 畫布解析度(px / 紙mm)
+  const c = document.createElement("canvas");
+  c.width = Math.round(o.paperW * res); c.height = Math.round(o.paperH * res);
+  c.style.width = (o.paperW * k) + "px"; c.style.height = (o.paperH * k) + "px";
+  c.style.background = "#fff"; c.style.boxShadow = "0 2px 14px #0008";
+  c.title = "預覽為簡化點陣圖;實際列印輸出仍是向量(含標題欄)";
+  const x = c.getContext("2d");
+  x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height);
+  const vs = res / L.scaleN; // px / 世界mm
+  const vw = { scale: vs, tx: -L.vbX * vs, ty: (L.vbY + L.vbH) * vs };
+  x.lineWidth = Math.max(0.6, 0.35 * res);
+  for (const e of visibleEntities()) {
+    const col = printColor(layerOf(e).color);
+    x.strokeStyle = col; x.fillStyle = col;
+    strokeEntity(x, e, vw);
+  }
+  return c;
+}
 function refreshPreview() {
   const o = printOpts();
-  const s = svgString(o);
   const wrap = $("previewWrap");
-  if (!s) { wrap.innerHTML = "<div style='color:#ddd'>沒有圖形</div>"; return; }
-  wrap.innerHTML = s;
-  const svg = wrap.firstElementChild;
-  // 預覽縮小顯示
-  const maxW = wrap.clientWidth - 24, maxH = wrap.clientHeight - 24;
-  const k = Math.min(maxW / o.paperW, maxH / o.paperH, 3);
-  svg.setAttribute("width", (o.paperW * k) + "px");
-  svg.setAttribute("height", (o.paperH * k) + "px");
+  if (!visibleEntities().length) { wrap.innerHTML = "<div style='color:#ddd'>沒有圖形</div>"; return; }
+  wrap.innerHTML = "<div style='color:#ddd'>產生預覽中…</div>";
+  clearTimeout(refreshPreview._tm);
+  refreshPreview._tm = setTimeout(() => {
+    if (visibleEntities().length > RASTER_PREVIEW_LIMIT) {
+      const c = rasterPreview(o);
+      wrap.innerHTML = "";
+      if (c) wrap.appendChild(c);
+      return;
+    }
+    const s = svgString(o);
+    if (!s) { wrap.innerHTML = "<div style='color:#ddd'>沒有圖形</div>"; return; }
+    wrap.innerHTML = s;
+    const svg = wrap.firstElementChild;
+    // 預覽縮小顯示
+    const maxW = wrap.clientWidth - 24, maxH = wrap.clientHeight - 24;
+    const k = Math.min(maxW / o.paperW, maxH / o.paperH, 3);
+    svg.setAttribute("width", (o.paperW * k) + "px");
+    svg.setAttribute("height", (o.paperH * k) + "px");
+  }, 40);
 }
 $("btnPdf").onclick = () => {
   if (!visibleEntities().length) { toast("沒有圖形可匯出,請先繪製"); return; }
@@ -1945,14 +2000,18 @@ $("btnPdf").onclick = () => {
 $("btnClosePrint").onclick = () => $("printModal").style.display = "none";
 for (const id of ["pPaper", "pOrient", "pScale", "pTitle", "pName"]) $(id).addEventListener("input", refreshPreview);
 $("btnDoPrint").onclick = () => {
-  const o = printOpts();
-  const s = svgString(o);
-  if (!s) return;
-  $("printArea").innerHTML = s;
-  let st = $("pageStyle");
-  if (!st) { st = document.createElement("style"); st.id = "pageStyle"; document.head.appendChild(st); }
-  st.textContent = `@page{size:${o.paperW}mm ${o.paperH}mm; margin:0;}`;
-  window.print();
+  const n = visibleEntities().length;
+  if (n > RASTER_PREVIEW_LIMIT) toast(`圖很大(${n} 個圖元),向量組版需 10~30 秒,請耐心等列印視窗出現…`, 12000);
+  setTimeout(() => {
+    const o = printOpts();
+    const s = svgString(o);
+    if (!s) return;
+    $("printArea").innerHTML = s;
+    let st = $("pageStyle");
+    if (!st) { st = document.createElement("style"); st.id = "pageStyle"; document.head.appendChild(st); }
+    st.textContent = `@page{size:${o.paperW}mm ${o.paperH}mm; margin:0;}`;
+    window.print();
+  }, 60);
 };
 window.addEventListener("afterprint", () => { $("printArea").innerHTML = ""; });
 
