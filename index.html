@@ -1,0 +1,1348 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>簡易CAD — 2D 繪圖</title>
+<style>
+:root{
+  --bg:#1e2126; --panel:#262a31; --panel2:#2d323b; --border:#3a4048;
+  --fg:#d8dde4; --dim:#8a939e; --acc:#4da3ff; --accdark:#2b6cb0; --danger:#e06060;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+html,body{height:100%; overflow:hidden;}
+body{font-family:"Microsoft JhengHei","Segoe UI",sans-serif; background:var(--bg); color:var(--fg); font-size:13px;}
+#app{display:flex; flex-direction:column; height:100%;}
+
+/* ── 上方工具列 ── */
+#topbar{display:flex; align-items:center; gap:4px; padding:6px 8px; background:var(--panel); border-bottom:1px solid var(--border); flex-wrap:wrap;}
+#topbar .title{font-weight:bold; margin-right:10px; color:var(--acc);}
+button{background:var(--panel2); color:var(--fg); border:1px solid var(--border); border-radius:4px; padding:5px 10px; cursor:pointer; font-size:13px; font-family:inherit;}
+button:hover{background:#3a414c;}
+button.primary{background:var(--accdark); border-color:var(--acc);}
+button.primary:hover{background:#3182ce;}
+.sep{width:1px; height:22px; background:var(--border); margin:0 6px;}
+
+/* ── 主區 ── */
+#main{display:flex; flex:1; min-height:0;}
+#toolbox{width:92px; background:var(--panel); border-right:1px solid var(--border); padding:6px; display:flex; flex-direction:column; gap:4px; overflow-y:auto;}
+#toolbox button{width:100%; text-align:left; padding:7px 8px;}
+#toolbox button.active{background:var(--accdark); border-color:var(--acc); color:#fff;}
+#toolbox .grp{color:var(--dim); font-size:11px; margin-top:6px;}
+
+#canvasWrap{flex:1; position:relative; min-width:0;}
+#cv{position:absolute; inset:0; width:100%; height:100%; display:block; cursor:crosshair;}
+#floatIn{position:absolute; display:none; z-index:20; width:150px; padding:4px 6px; background:#fff; color:#000; border:2px solid var(--acc); border-radius:3px; font-size:14px; font-family:inherit;}
+
+#side{width:230px; background:var(--panel); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow-y:auto;}
+#side h3{font-size:12px; color:var(--dim); padding:8px 10px 4px; text-transform:uppercase;}
+#layerList{padding:0 8px;}
+.layerRow{display:flex; align-items:center; gap:5px; padding:4px 5px; border-radius:4px; cursor:pointer;}
+.layerRow.current{background:var(--panel2); outline:1px solid var(--acc);}
+.layerRow input[type=color]{width:22px; height:20px; border:none; background:none; padding:0; cursor:pointer;}
+.layerRow .lname{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.layerRow .icon{cursor:pointer; opacity:.85; user-select:none;}
+.layerRow .icon.off{opacity:.3;}
+#side .box{padding:4px 10px 10px;}
+#side label{display:flex; align-items:center; gap:6px; margin:4px 0; color:var(--dim);}
+#side input[type=number]{width:70px; background:var(--panel2); border:1px solid var(--border); color:var(--fg); padding:3px 5px; border-radius:3px;}
+#side input[type=checkbox]{accent-color:var(--acc);}
+#selInfo{padding:4px 10px; color:var(--dim); font-size:12px; line-height:1.6;}
+
+/* ── 狀態列 ── */
+#status{display:flex; gap:16px; padding:4px 10px; background:var(--panel); border-top:1px solid var(--border); color:var(--dim); font-size:12px;}
+#hint{color:var(--acc);}
+#coords{margin-left:auto; font-variant-numeric:tabular-nums;}
+
+/* ── 提示訊息 ── */
+#toast{position:fixed; bottom:44px; left:50%; transform:translateX(-50%); background:#111a; color:#fff; padding:8px 18px; border-radius:6px; display:none; z-index:100; max-width:70%;}
+
+/* ── 列印/匯出 PDF 視窗 ── */
+#printModal{position:fixed; inset:0; background:#000a; display:none; z-index:50; align-items:center; justify-content:center;}
+#printModal .dlg{background:var(--panel); border:1px solid var(--border); border-radius:8px; width:min(880px,94vw); max-height:92vh; display:flex; flex-direction:column;}
+#printModal .dlgHead{display:flex; align-items:center; padding:10px 14px; border-bottom:1px solid var(--border); font-weight:bold;}
+#printModal .dlgHead button{margin-left:auto;}
+#printModal .dlgBody{display:flex; gap:12px; padding:12px; min-height:0; flex:1;}
+#printOpts{width:240px; display:flex; flex-direction:column; gap:8px;}
+#printOpts label{display:flex; flex-direction:column; gap:3px; color:var(--dim); font-size:12px;}
+#printOpts select,#printOpts input[type=text]{background:var(--panel2); border:1px solid var(--border); color:var(--fg); padding:5px; border-radius:4px; font-family:inherit;}
+#printOpts .chk{flex-direction:row; align-items:center;}
+#previewWrap{flex:1; background:#555; border-radius:4px; display:flex; align-items:center; justify-content:center; overflow:auto; padding:12px;}
+#previewWrap svg{background:#fff; box-shadow:0 2px 14px #0008;}
+
+/* ── 實際列印 ── */
+#printArea{display:none;}
+@media print{
+  body>#app,#printModal,#toast{display:none !important;}
+  html,body{overflow:visible; background:#fff;}
+  #printArea{display:block !important;}
+  #printArea svg{display:block;}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <span class="title">簡易CAD</span>
+    <button id="btnNew">新增</button>
+    <button id="btnOpen">開啟</button>
+    <button id="btnSave">儲存</button>
+    <span class="sep"></span>
+    <button id="btnUndo">↩ 復原</button>
+    <button id="btnRedo">↪ 重做</button>
+    <span class="sep"></span>
+    <button id="btnZoomExt">縮放全圖</button>
+    <span class="sep"></span>
+    <button id="btnPdf" class="primary">匯出 PDF</button>
+    <button id="btnSvg">SVG</button>
+    <button id="btnPng">PNG</button>
+    <button id="btnDxf">DXF</button>
+    <input type="file" id="fileIn" accept=".json" style="display:none">
+  </div>
+  <div id="main">
+    <div id="toolbox">
+      <div class="grp">工具</div>
+      <button data-tool="select">▣ 選取</button>
+      <button data-tool="line">╱ 線段 L</button>
+      <button data-tool="rect">▭ 矩形 R</button>
+      <button data-tool="circle">◯ 圓 C</button>
+      <button data-tool="arc">◠ 圓弧 A</button>
+      <button data-tool="poly">⌒ 折線 P</button>
+      <button data-tool="text">A 文字 T</button>
+      <button data-tool="dim">⟷ 標註 D</button>
+      <button data-tool="measure">📏 量測 M</button>
+      <div class="grp">編輯</div>
+      <button id="btnDup">⧉ 複製</button>
+      <button id="btnDel">✕ 刪除</button>
+    </div>
+    <div id="canvasWrap">
+      <canvas id="cv"></canvas>
+      <input id="floatIn" autocomplete="off">
+    </div>
+    <div id="side">
+      <h3>圖層 <button id="btnAddLayer" style="float:right;padding:1px 8px;margin-right:8px">＋</button></h3>
+      <div id="layerList"></div>
+      <h3>輔助</h3>
+      <div class="box">
+        <label><input type="checkbox" id="chkGrid" checked> 顯示格點</label>
+        <label><input type="checkbox" id="chkSnapGrid" checked> 格點鎖點</label>
+        <label><input type="checkbox" id="chkOsnap" checked> 物件鎖點</label>
+        <label><input type="checkbox" id="chkOrtho"> 正交 (Shift)</label>
+      </div>
+      <h3>文字/標註</h3>
+      <div class="box">
+        <label>文字高度 <input type="number" id="inTextH" min="0.1" step="0.5"> mm</label>
+        <label>標註字高 <input type="number" id="inDimH" min="0.1" step="0.5"> mm</label>
+        <button id="btnAutoH" style="margin-top:4px">依圖面自動調整字高</button>
+      </div>
+      <h3>選取資訊</h3>
+      <div id="selInfo">未選取</div>
+    </div>
+  </div>
+  <div id="status">
+    <span id="hint">選取:點選或框選物件</span>
+    <span id="coords">0.0, 0.0</span>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<div id="printModal">
+  <div class="dlg">
+    <div class="dlgHead">匯出 PDF / 列印 <button id="btnClosePrint">✕ 關閉</button></div>
+    <div class="dlgBody">
+      <div id="printOpts">
+        <label>紙張
+          <select id="pPaper"><option value="A4">A4 (210×297)</option><option value="A3">A3 (297×420)</option></select>
+        </label>
+        <label>方向
+          <select id="pOrient"><option value="landscape">橫向</option><option value="portrait">直向</option></select>
+        </label>
+        <label>比例
+          <select id="pScale">
+            <option value="fit">符合頁面</option>
+            <option value="1">1:1</option><option value="2">1:2</option><option value="5">1:5</option>
+            <option value="10">1:10</option><option value="20">1:20</option><option value="50">1:50</option>
+            <option value="100">1:100</option><option value="200">1:200</option>
+          </select>
+        </label>
+        <label class="chk"><input type="checkbox" id="pTitle" checked> 標題欄</label>
+        <label>圖名 <input type="text" id="pName" value="未命名圖面"></label>
+        <div style="color:var(--dim);font-size:12px;line-height:1.5">
+          按「列印」後,在印表機選<b>「另存為 PDF」</b>或<b>「Microsoft Print to PDF」</b>即可存成 PDF 檔。
+        </div>
+        <button id="btnDoPrint" class="primary" style="margin-top:auto">🖨 列印 / 存成 PDF</button>
+      </div>
+      <div id="previewWrap"></div>
+    </div>
+  </div>
+</div>
+
+<div id="printArea"></div>
+
+<script>
+"use strict";
+/* ============================================================
+   簡易CAD — 單檔 2D 繪圖軟體
+   座標系:單位 mm,y 向上,原點左下(與 圖面繪製 規約一致)
+   ============================================================ */
+
+// ─── 狀態 ───────────────────────────────────────────────
+const DEFAULT_DOC = () => ({
+  version: 1, units: "mm",
+  layers: [{ name: "0", color: "#e8e8e8", visible: true, locked: false }],
+  entities: [],
+  settings: { textH: 3.5, dimH: 3.5 },
+});
+let doc = DEFAULT_DOC();
+let currentLayer = "0";
+let view = { scale: 1, tx: 60, ty: 0 };   // sx = wx*scale+tx ; sy = -wy*scale+ty
+let tool = "select";
+let pts = [];            // 繪製中已點的世界座標點
+let cursorW = { x: 0, y: 0 };  // 目前游標(已鎖點)的世界座標
+let cursorS = { x: 0, y: 0 };  // 螢幕座標
+let snapMark = null;     // 鎖點標記 {x,y,kind}
+let selection = new Set();
+let marquee = null;      // 框選 {x1,y1,x2,y2} 螢幕座標
+let moveDrag = null;     // 移動中 {lastW}
+let panning = null;
+let spaceHeld = false;
+let idSeq = 1;
+let undoStack = [], redoStack = [];
+
+const $ = id => document.getElementById(id);
+const cv = $("cv"), ctx = cv.getContext("2d");
+
+// ─── 小工具 ─────────────────────────────────────────────
+function uid() { return idSeq++; }
+function fmt(v) { return String(parseFloat(v.toFixed(2))); }
+function toast(msg, ms = 2200) {
+  const t = $("toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(t._tm); t._tm = setTimeout(() => t.style.display = "none", ms);
+}
+function w2s(p) { return { x: p.x * view.scale + view.tx, y: -p.y * view.scale + view.ty }; }
+function s2w(x, y) { return { x: (x - view.tx) / view.scale, y: (view.ty - y) / view.scale }; }
+// ── 大圖效能:文件版本號 + 圖層表/可見清單/空間網格快取 ──
+let docRev = 0, lmapCache = null, visCache = null, spatial = null;
+function bumpRev() { docRev++; lmapCache = null; visCache = null; spatial = null; }
+function layerMap() {
+  if (!lmapCache || lmapCache.rev !== docRev)
+    lmapCache = { rev: docRev, m: new Map(doc.layers.map(l => [l.name, l])) };
+  return lmapCache.m;
+}
+function layerOf(e) { return layerMap().get(e.layer) || doc.layers[0]; }
+function visibleEntities() {
+  if (!visCache || visCache.rev !== docRev)
+    visCache = { rev: docRev, list: doc.entities.filter(e => layerOf(e).visible) };
+  return visCache.list;
+}
+function editableEntities() { return visibleEntities().filter(e => !layerOf(e).locked); }
+function buildSpatial() { // 均勻網格:鎖點/點選只查游標附近
+  const list = visibleEntities();
+  let b = { minx: 0, miny: 0, maxx: 1, maxy: 1 };
+  if (list.length) b = extents(list) || b;
+  const cs = Math.max(b.maxx - b.minx, b.maxy - b.miny, 1) / 96;
+  const map = new Map(), big = [];
+  for (const e of list) {
+    const q = bboxCached(e);
+    const x0 = Math.floor(q.minx / cs), x1 = Math.floor(q.maxx / cs);
+    const y0 = Math.floor(q.miny / cs), y1 = Math.floor(q.maxy / cs);
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) > 64) { big.push(e); continue; } // 跨太多格的大物件
+    for (let gx = x0; gx <= x1; gx++) for (let gy = y0; gy <= y1; gy++) {
+      const k = gx + "," + gy;
+      let a = map.get(k); if (!a) map.set(k, a = []);
+      a.push(e);
+    }
+  }
+  spatial = { rev: docRev, cs, map, big };
+}
+function nearEntities(w, tw) { // 游標附近(世界座標 ± tw)的可見物件
+  if (!spatial || spatial.rev !== docRev) buildSpatial();
+  const cs = spatial.cs, out = [], seen = new Set();
+  const x0 = Math.floor((w.x - tw) / cs), x1 = Math.floor((w.x + tw) / cs);
+  const y0 = Math.floor((w.y - tw) / cs), y1 = Math.floor((w.y + tw) / cs);
+  for (let gx = x0; gx <= x1; gx++) for (let gy = y0; gy <= y1; gy++) {
+    const a = spatial.map.get(gx + "," + gy);
+    if (a) for (const e of a) if (!seen.has(e.id)) { seen.add(e.id); out.push(e); }
+  }
+  for (const e of spatial.big) out.push(e);
+  return out;
+}
+
+// ─── 復原/重做 ──────────────────────────────────────────
+function snapshot() {
+  const s = JSON.stringify({ en: doc.entities, ly: doc.layers, cl: currentLayer });
+  undoStack.push(s);
+  const cap = s.length > 5e6 ? 10 : 100; // 大圖限制快照數,避免吃光記憶體
+  while (undoStack.length > cap) undoStack.shift();
+  redoStack = [];
+}
+function restore(s) {
+  const o = JSON.parse(s);
+  doc.entities = o.en; doc.layers = o.ly; currentLayer = o.cl;
+  selection.clear(); bumpRev(); renderLayers(); redraw(true); autosave();
+}
+function undo() {
+  if (!undoStack.length) { toast("沒有可復原的步驟"); return; }
+  redoStack.push(JSON.stringify({ en: doc.entities, ly: doc.layers, cl: currentLayer }));
+  restore(undoStack.pop());
+}
+function redo() {
+  if (!redoStack.length) { toast("沒有可重做的步驟"); return; }
+  undoStack.push(JSON.stringify({ en: doc.entities, ly: doc.layers, cl: currentLayer }));
+  restore(redoStack.pop());
+}
+
+// ─── 幾何 ───────────────────────────────────────────────
+function entPoints(e) { // 物件的特徵點(供鎖點/包圍盒)
+  switch (e.type) {
+    case "line": return [
+      { x: e.x1, y: e.y1, kind: "端點" }, { x: e.x2, y: e.y2, kind: "端點" },
+      { x: (e.x1 + e.x2) / 2, y: (e.y1 + e.y2) / 2, kind: "中點" }];
+    case "rect": {
+      const c = [[e.x, e.y], [e.x + e.w, e.y], [e.x + e.w, e.y + e.h], [e.x, e.y + e.h]];
+      const p = c.map(q => ({ x: q[0], y: q[1], kind: "端點" }));
+      for (let i = 0; i < 4; i++) { const a = c[i], b = c[(i + 1) % 4]; p.push({ x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, kind: "中點" }); }
+      return p;
+    }
+    case "circle": return [
+      { x: e.cx, y: e.cy, kind: "圓心" },
+      { x: e.cx + e.r, y: e.cy, kind: "四分點" }, { x: e.cx - e.r, y: e.cy, kind: "四分點" },
+      { x: e.cx, y: e.cy + e.r, kind: "四分點" }, { x: e.cx, y: e.cy - e.r, kind: "四分點" }];
+    case "arc": return [
+      { x: e.cx, y: e.cy, kind: "圓心" },
+      { x: e.cx + e.r * Math.cos(e.a1), y: e.cy + e.r * Math.sin(e.a1), kind: "端點" },
+      { x: e.cx + e.r * Math.cos(e.a2), y: e.cy + e.r * Math.sin(e.a2), kind: "端點" }];
+    case "poly": {
+      const p = e.pts.map(q => ({ x: q[0], y: q[1], kind: "端點" }));
+      for (let i = 0; i < e.pts.length - (e.closed ? 0 : 1); i++) {
+        const a = e.pts[i], b = e.pts[(i + 1) % e.pts.length];
+        p.push({ x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, kind: "中點" });
+      }
+      return p;
+    }
+    case "text": return [{ x: e.x, y: e.y, kind: "端點" }];
+    case "dim": return [{ x: e.x1, y: e.y1, kind: "端點" }, { x: e.x2, y: e.y2, kind: "端點" }];
+  }
+  return [];
+}
+function bbox(e) {
+  let xs = [], ys = [];
+  if (e.type === "circle") { xs = [e.cx - e.r, e.cx + e.r]; ys = [e.cy - e.r, e.cy + e.r]; }
+  else if (e.type === "arc") { xs = [e.cx - e.r, e.cx + e.r]; ys = [e.cy - e.r, e.cy + e.r]; }
+  else if (e.type === "text") { const w = e.str.length * e.h; xs = [e.x, e.x + w]; ys = [e.y, e.y + e.h]; }
+  else if (e.type === "dim") { for (const s of dimPrimitives(e).lines) { xs.push(s[0].x, s[1].x); ys.push(s[0].y, s[1].y); } }
+  else { for (const p of entPoints(e)) { xs.push(p.x); ys.push(p.y); } }
+  return { minx: Math.min(...xs), miny: Math.min(...ys), maxx: Math.max(...xs), maxy: Math.max(...ys) };
+}
+let bbCache = new WeakMap(); // 包圍盒快取:大圖下鎖點/點選的粗篩必需
+function bboxCached(e) {
+  let b = bbCache.get(e);
+  if (!b) { b = bbox(e); bbCache.set(e, b); }
+  return b;
+}
+function bbInvalidate(e) { bbCache.delete(e); }
+function extents(list) {
+  const es = list || visibleEntities();
+  if (!es.length) return null;
+  let b = { minx: Infinity, miny: Infinity, maxx: -Infinity, maxy: -Infinity };
+  for (const e of es) {
+    const q = bbox(e);
+    b.minx = Math.min(b.minx, q.minx); b.miny = Math.min(b.miny, q.miny);
+    b.maxx = Math.max(b.maxx, q.maxx); b.maxy = Math.max(b.maxy, q.maxy);
+  }
+  return b;
+}
+function distSeg(p, a, b) { // 點到線段距離
+  const dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy;
+  if (L2 === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / L2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+function polySegs(e) { // rect/poly 拆成線段
+  if (e.type === "rect") {
+    const c = [[e.x, e.y], [e.x + e.w, e.y], [e.x + e.w, e.y + e.h], [e.x, e.y + e.h]];
+    return c.map((q, i) => [{ x: q[0], y: q[1] }, { x: c[(i + 1) % 4][0], y: c[(i + 1) % 4][1] }]);
+  }
+  const segs = [];
+  for (let i = 0; i < e.pts.length - 1; i++) segs.push([{ x: e.pts[i][0], y: e.pts[i][1] }, { x: e.pts[i + 1][0], y: e.pts[i + 1][1] }]);
+  if (e.closed && e.pts.length > 2) segs.push([{ x: e.pts[e.pts.length - 1][0], y: e.pts[e.pts.length - 1][1] }, { x: e.pts[0][0], y: e.pts[0][1] }]);
+  return segs;
+}
+function hitEntity(e, w, tol) {
+  switch (e.type) {
+    case "line": return distSeg(w, { x: e.x1, y: e.y1 }, { x: e.x2, y: e.y2 }) < tol;
+    case "rect": case "poly": return polySegs(e).some(s => distSeg(w, s[0], s[1]) < tol);
+    case "circle": return Math.abs(Math.hypot(w.x - e.cx, w.y - e.cy) - e.r) < tol;
+    case "arc": {
+      if (Math.abs(Math.hypot(w.x - e.cx, w.y - e.cy) - e.r) >= tol) return false;
+      let a = Math.atan2(w.y - e.cy, w.x - e.cx);
+      let sweep = norm2pi(e.a2 - e.a1);
+      return norm2pi(a - e.a1) <= sweep;
+    }
+    case "text": {
+      const w2 = e.str.length * e.h; // CJK 近似寬
+      return w.x >= e.x - tol && w.x <= e.x + w2 + tol && w.y >= e.y - tol && w.y <= e.y + e.h + tol;
+    }
+    case "dim": return dimPrimitives(e).lines.some(s => distSeg(w, s[0], s[1]) < tol);
+  }
+  return false;
+}
+function norm2pi(a) { a = a % (2 * Math.PI); return a < 0 ? a + 2 * Math.PI : a; }
+function hitTest(w) {
+  const tol = 6 / view.scale;
+  const es = nearEntities(w, tol);
+  for (let i = es.length - 1; i >= 0; i--) {
+    const e = es[i];
+    if (layerOf(e).locked) continue;
+    const b = bboxCached(e);
+    if (w.x < b.minx - tol || w.x > b.maxx + tol || w.y < b.miny - tol || w.y > b.maxy + tol) continue;
+    if (hitEntity(e, w, tol)) return e;
+  }
+  return null;
+}
+function translateEntity(e, dx, dy) {
+  bbInvalidate(e);
+  switch (e.type) {
+    case "line": case "dim": e.x1 += dx; e.y1 += dy; e.x2 += dx; e.y2 += dy; break;
+    case "rect": case "text": e.x += dx; e.y += dy; break;
+    case "circle": case "arc": e.cx += dx; e.cy += dy; break;
+    case "poly": for (const p of e.pts) { p[0] += dx; p[1] += dy; } break;
+  }
+}
+
+// ─── 標註幾何(Canvas / SVG / DXF 共用) ─────────────────
+function dimPrimitives(d, hOver) {
+  const h = hOver || doc.settings.dimH || 3.5;
+  const dx = d.x2 - d.x1, dy = d.y2 - d.y1, L = Math.hypot(dx, dy) || 1e-9;
+  const ux = dx / L, uy = dy / L, nx = -uy, ny = ux;
+  const o = d.off, so = o >= 0 ? 1 : -1;
+  const A = { x: d.x1 + nx * o, y: d.y1 + ny * o }, B = { x: d.x2 + nx * o, y: d.y2 + ny * o };
+  const ext = h * 0.5, gap = h * 0.3, ah = h;
+  const lines = [
+    [{ x: d.x1 + nx * so * gap, y: d.y1 + ny * so * gap }, { x: A.x + nx * so * ext, y: A.y + ny * so * ext }],
+    [{ x: d.x2 + nx * so * gap, y: d.y2 + ny * so * gap }, { x: B.x + nx * so * ext, y: B.y + ny * so * ext }],
+    [A, B],
+  ];
+  const tris = [
+    [A, { x: A.x + ux * ah + nx * ah * .3, y: A.y + uy * ah + ny * ah * .3 }, { x: A.x + ux * ah - nx * ah * .3, y: A.y + uy * ah - ny * ah * .3 }],
+    [B, { x: B.x - ux * ah + nx * ah * .3, y: B.y - uy * ah + ny * ah * .3 }, { x: B.x - ux * ah - nx * ah * .3, y: B.y - uy * ah - ny * ah * .3 }],
+  ];
+  let ang = Math.atan2(uy, ux);
+  let tnx = nx * so, tny = ny * so;
+  if (ang > Math.PI / 2 + 1e-9 || ang <= -Math.PI / 2 + 1e-9) ang += Math.PI; // 文字保持可讀
+  const mid = { x: (A.x + B.x) / 2 + tnx * h * 0.5, y: (A.y + B.y) / 2 + tny * h * 0.5 };
+  return { lines, tris, text: { x: mid.x, y: mid.y, h, str: fmt(L), ang } };
+}
+
+// ─── 鎖點 ───────────────────────────────────────────────
+function getSnap(mx, my) {
+  snapMark = null;
+  if ($("chkOsnap").checked) {
+    const tol = 10; let best = null, bd = tol;
+    const w = s2w(mx, my), tw = tol / view.scale; // 世界座標粗篩範圍
+    for (const e of nearEntities(w, tw)) {
+      const b = bboxCached(e); // 粗篩:游標不在包圍盒附近就跳過(大圖效能關鍵)
+      if (w.x < b.minx - tw || w.x > b.maxx + tw || w.y < b.miny - tw || w.y > b.maxy + tw) continue;
+      for (const sp of entPoints(e)) {
+        const s = w2s(sp), d = Math.hypot(s.x - mx, s.y - my);
+        if (d < bd) { bd = d; best = sp; }
+      }
+    }
+    if (best) { snapMark = best; return { x: best.x, y: best.y }; }
+  }
+  if ($("chkSnapGrid").checked) {
+    const st = gridStep().minor;
+    const w = s2w(mx, my);
+    return { x: Math.round(w.x / st) * st, y: Math.round(w.y / st) * st };
+  }
+  return s2w(mx, my);
+}
+function applyOrtho(p, ref) {
+  if (!ref) return p;
+  const on = $("chkOrtho").checked;
+  if (!on) return p;
+  return Math.abs(p.x - ref.x) > Math.abs(p.y - ref.y) ? { x: p.x, y: ref.y } : { x: ref.x, y: p.y };
+}
+function gridStep() {
+  let minor = 1;
+  while (minor * view.scale < 8) minor *= 10;
+  while (minor * view.scale > 80) minor /= 10;
+  return { minor, major: minor * 10 };
+}
+
+// ─── 繪製 ───────────────────────────────────────────────
+function resizeCanvas() {
+  const r = cv.parentElement.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = r.width * dpr; cv.height = r.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cv._w = r.width; cv._h = r.height;
+  if (!view._init && r.height > 0) { view.ty = r.height - 60; view._init = true; }
+  redraw(true);
+}
+function drawGrid(c) {
+  if (!$("chkGrid").checked) return;
+  const { minor, major } = gridStep();
+  const w0 = s2w(0, cv._h), w1 = s2w(cv._w, 0);
+  c.lineWidth = 1;
+  for (const [step, col] of [[minor, "#2a2f37"], [major, "#353c47"]]) {
+    c.strokeStyle = col; c.beginPath();
+    for (let x = Math.floor(w0.x / step) * step; x <= w1.x; x += step) {
+      const s = w2s({ x, y: 0 }); c.moveTo(s.x, 0); c.lineTo(s.x, cv._h);
+    }
+    for (let y = Math.floor(w0.y / step) * step; y <= w1.y; y += step) {
+      const s = w2s({ x: 0, y }); c.moveTo(0, s.y); c.lineTo(cv._w, s.y);
+    }
+    c.stroke();
+  }
+  // 原點軸線
+  c.strokeStyle = "#4a5568"; c.beginPath();
+  const o = w2s({ x: 0, y: 0 });
+  c.moveTo(o.x, 0); c.lineTo(o.x, cv._h); c.moveTo(0, o.y); c.lineTo(cv._w, o.y);
+  c.stroke();
+}
+function strokeEntity(c, e, vw) { // 以任意 view 畫在任意 context(螢幕/PNG 共用)
+  const W2S = p => ({ x: p.x * vw.scale + vw.tx, y: -p.y * vw.scale + vw.ty });
+  c.beginPath();
+  switch (e.type) {
+    case "line": { const a = W2S({ x: e.x1, y: e.y1 }), b = W2S({ x: e.x2, y: e.y2 }); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); break; }
+    case "rect": case "poly": {
+      const segs = polySegs(e);
+      if (!segs.length && e.type === "poly") { break; }
+      const st = W2S(segs[0][0]); c.moveTo(st.x, st.y);
+      for (const s of segs) { const b = W2S(s[1]); c.lineTo(b.x, b.y); }
+      break;
+    }
+    case "circle": { const o = W2S({ x: e.cx, y: e.cy }); c.arc(o.x, o.y, e.r * vw.scale, 0, Math.PI * 2); break; }
+    case "arc": { const o = W2S({ x: e.cx, y: e.cy }); c.arc(o.x, o.y, e.r * vw.scale, -e.a1, -e.a2, true); break; }
+    case "text": {
+      c.stroke(); // 先送出既有 path
+      const s = W2S({ x: e.x, y: e.y });
+      c.font = (e.h * vw.scale) + "px 'Microsoft JhengHei',sans-serif";
+      c.textAlign = "left"; c.textBaseline = "alphabetic";
+      c.fillText(e.str, s.x, s.y);
+      return;
+    }
+    case "dim": {
+      const g = dimPrimitives(e);
+      for (const s of g.lines) { const a = W2S(s[0]), b = W2S(s[1]); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); }
+      c.stroke();
+      for (const t of g.tris) {
+        c.beginPath();
+        const p0 = W2S(t[0]), p1 = W2S(t[1]), p2 = W2S(t[2]);
+        c.moveTo(p0.x, p0.y); c.lineTo(p1.x, p1.y); c.lineTo(p2.x, p2.y); c.closePath(); c.fill();
+      }
+      const s = W2S({ x: g.text.x, y: g.text.y });
+      c.save(); c.translate(s.x, s.y); c.rotate(-g.text.ang);
+      c.font = (g.text.h * vw.scale) + "px 'Microsoft JhengHei',sans-serif";
+      c.textAlign = "center"; c.textBaseline = "alphabetic";
+      c.fillText(g.text.str, 0, 0); c.restore();
+      return;
+    }
+  }
+  c.stroke();
+}
+// ── 場景快取:圖元只在內容/視圖確定後重畫一次,滑鼠移動只做貼圖+游標層 ──
+const sceneCv = document.createElement("canvas");
+let sceneView = null;   // 快取繪製時的 view;null = 需重畫
+let sceneTimer = null;
+function renderScene() {
+  sceneCv.width = cv.width; sceneCv.height = cv.height;
+  const c = sceneCv.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawGrid(c);
+  c.lineWidth = 1.5;
+  for (const e of visibleEntities()) {
+    const col = selection.has(e.id) ? "#59b2ff" : layerOf(e).color;
+    c.strokeStyle = col; c.fillStyle = col;
+    if (selection.has(e.id)) c.setLineDash([6, 4]); else c.setLineDash([]);
+    strokeEntity(c, e, view);
+  }
+  c.setLineDash([]);
+  sceneView = { scale: view.scale, tx: view.tx, ty: view.ty };
+}
+function redraw(sceneChanged) {
+  if (sceneChanged || !sceneView) renderScene();
+  const dpr = window.devicePixelRatio || 1;
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if (sceneView.scale === view.scale && sceneView.tx === view.tx && sceneView.ty === view.ty) {
+    ctx.drawImage(sceneCv, 0, 0);
+  } else {
+    // 平移/縮放進行中:先用快取位圖近似顯示,停頓後再精算
+    const k = view.scale / sceneView.scale;
+    ctx.drawImage(sceneCv, 0, 0, sceneCv.width, sceneCv.height,
+      (view.tx - k * sceneView.tx) * dpr, (view.ty - k * sceneView.ty) * dpr,
+      sceneCv.width * k, sceneCv.height * k);
+    clearTimeout(sceneTimer);
+    sceneTimer = setTimeout(() => { renderScene(); redraw(); }, 120);
+  }
+  ctx.restore();
+  drawPreview();
+  drawSnapMark();
+  if (marquee) {
+    const m = marquee, L = Math.min(m.x1, m.x2), T = Math.min(m.y1, m.y2), W = Math.abs(m.x2 - m.x1), H = Math.abs(m.y2 - m.y1);
+    ctx.fillStyle = m.x2 >= m.x1 ? "#4da3ff22" : "#7fdc7f22";
+    ctx.strokeStyle = m.x2 >= m.x1 ? "#4da3ff" : "#7fdc7f";
+    ctx.setLineDash(m.x2 >= m.x1 ? [] : [5, 4]);
+    ctx.fillRect(L, T, W, H); ctx.strokeRect(L, T, W, H);
+    ctx.setLineDash([]);
+  }
+}
+function drawPreview() {
+  if (!pts.length) return;
+  const p = cursorW;
+  ctx.strokeStyle = "#9ad1ff"; ctx.fillStyle = "#9ad1ff"; ctx.lineWidth = 1.2; ctx.setLineDash([4, 4]);
+  const tmp = previewEntity(p);
+  if (tmp) strokeEntity(ctx, tmp, view);
+  ctx.setLineDash([]);
+}
+function previewEntity(p) {
+  const a = pts[0];
+  switch (tool) {
+    case "line": case "measure": return { type: "line", x1: a.x, y1: a.y, x2: p.x, y2: p.y };
+    case "rect": return { type: "rect", x: Math.min(a.x, p.x), y: Math.min(a.y, p.y), w: Math.abs(p.x - a.x), h: Math.abs(p.y - a.y) };
+    case "circle": return { type: "circle", cx: a.x, cy: a.y, r: Math.hypot(p.x - a.x, p.y - a.y) };
+    case "arc":
+      if (pts.length === 1) return { type: "line", x1: a.x, y1: a.y, x2: p.x, y2: p.y };
+      return { type: "arc", cx: a.x, cy: a.y, r: Math.hypot(pts[1].x - a.x, pts[1].y - a.y), a1: Math.atan2(pts[1].y - a.y, pts[1].x - a.x), a2: Math.atan2(p.y - a.y, p.x - a.x) };
+    case "poly": return { type: "poly", pts: [...pts.map(q => [q.x, q.y]), [p.x, p.y]], closed: false };
+    case "dim":
+      if (pts.length === 1) return { type: "line", x1: a.x, y1: a.y, x2: p.x, y2: p.y };
+      return { type: "dim", x1: a.x, y1: a.y, x2: pts[1].x, y2: pts[1].y, off: dimOffsetFrom(p) };
+  }
+  return null;
+}
+function dimOffsetFrom(p) {
+  const a = pts[0], b = pts[1];
+  const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1e-9;
+  return ((p.x - a.x) * (-dy / L) + (p.y - a.y) * (dx / L));
+}
+function drawSnapMark() {
+  if (!snapMark) return;
+  const s = w2s(snapMark);
+  ctx.strokeStyle = "#ffd75e"; ctx.lineWidth = 1.5;
+  ctx.strokeRect(s.x - 5, s.y - 5, 10, 10);
+  ctx.fillStyle = "#ffd75e"; ctx.font = "11px sans-serif"; ctx.textAlign = "left";
+  ctx.fillText(snapMark.kind, s.x + 8, s.y - 8);
+}
+
+// ─── 工具/事件 ──────────────────────────────────────────
+const HINTS = {
+  select: "選取:點選或框選物件;拖曳移動;雙擊文字可編輯",
+  line: "線段:點第一點,再點下一點(可連續);右鍵或 Esc 結束;可直接輸入長度",
+  rect: "矩形:點兩個對角",
+  circle: "圓:點圓心,再點半徑(可輸入數字指定半徑)",
+  arc: "圓弧:點圓心 → 起點 → 終點方向(逆時針)",
+  poly: "折線:連續點,右鍵結束;點回起點可封閉",
+  text: "文字:點放置位置後輸入內容,Enter 確定",
+  dim: "標註:點兩個端點,再點標註線位置",
+  measure: "量測:點兩點顯示距離",
+};
+function setTool(t) {
+  tool = t; pts = []; hideFloat();
+  document.querySelectorAll("#toolbox [data-tool]").forEach(b => b.classList.toggle("active", b.dataset.tool === t));
+  $("hint").textContent = HINTS[t] || "";
+  if (t !== "select") { selection.clear(); updateSelInfo(); }
+  redraw(true);
+}
+function addEntity(e) {
+  snapshot();
+  e.id = uid(); e.layer = currentLayer;
+  doc.entities.push(e);
+  bumpRev(); redraw(true); autosave();
+  return e;
+}
+function finishPoly(closed) {
+  if (pts.length >= 2) {
+    addEntity({ type: "poly", pts: pts.map(p => [p.x, p.y]), closed });
+  }
+  pts = []; redraw();
+}
+function cancelTool() {
+  if (tool === "poly" && pts.length >= 2) { finishPoly(false); return; }
+  if (tool === "line" && pts.length) { pts = []; redraw(); return; }
+  if (pts.length) { pts = []; redraw(); return; }
+  setTool("select");
+}
+
+cv.addEventListener("contextmenu", e => e.preventDefault());
+cv.addEventListener("mousedown", e => {
+  const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  if (e.button === 1 || (e.button === 0 && spaceHeld)) { panning = { mx, my }; e.preventDefault(); return; }
+  if (e.button === 2) { cancelTool(); return; }
+  if (e.button !== 0) return;
+  hideFloat();
+  let w = getSnap(mx, my);
+  const ref = pts.length ? pts[pts.length - 1] : null;
+  w = applyOrtho(w, ref);
+
+  switch (tool) {
+    case "select": {
+      const hit = hitTest(w);
+      if (hit) {
+        if (e.shiftKey) { selection.has(hit.id) ? selection.delete(hit.id) : selection.add(hit.id); }
+        else if (!selection.has(hit.id)) { selection.clear(); selection.add(hit.id); }
+        moveDrag = { lastW: w, moved: false };
+      } else {
+        if (!e.shiftKey) selection.clear();
+        marquee = { x1: mx, y1: my, x2: mx, y2: my };
+      }
+      updateSelInfo(); redraw(true);
+      break;
+    }
+    case "line":
+      pts.push(w);
+      if (pts.length === 2) { addEntity({ type: "line", x1: pts[0].x, y1: pts[0].y, x2: pts[1].x, y2: pts[1].y }); pts = [pts[1]]; }
+      break;
+    case "rect":
+      pts.push(w);
+      if (pts.length === 2) {
+        const a = pts[0];
+        addEntity({ type: "rect", x: Math.min(a.x, w.x), y: Math.min(a.y, w.y), w: Math.abs(w.x - a.x), h: Math.abs(w.y - a.y) });
+        pts = [];
+      }
+      break;
+    case "circle":
+      pts.push(w);
+      if (pts.length === 2) {
+        const rr = Math.hypot(w.x - pts[0].x, w.y - pts[0].y);
+        if (rr > 1e-9) addEntity({ type: "circle", cx: pts[0].x, cy: pts[0].y, r: rr });
+        pts = [];
+      }
+      break;
+    case "arc":
+      pts.push(w);
+      if (pts.length === 3) {
+        const c0 = pts[0], rr = Math.hypot(pts[1].x - c0.x, pts[1].y - c0.y);
+        if (rr > 1e-9) addEntity({
+          type: "arc", cx: c0.x, cy: c0.y, r: rr,
+          a1: Math.atan2(pts[1].y - c0.y, pts[1].x - c0.x),
+          a2: Math.atan2(w.y - c0.y, w.x - c0.x),
+        });
+        pts = [];
+      }
+      break;
+    case "poly": {
+      if (pts.length >= 3 && Math.hypot(w.x - pts[0].x, w.y - pts[0].y) < 8 / view.scale) { finishPoly(true); break; }
+      pts.push(w);
+      break;
+    }
+    case "text": {
+      const s = w2s(w);
+      floatInput(s.x, s.y - 30, "", str => {
+        if (str.trim()) addEntity({ type: "text", x: w.x, y: w.y, h: doc.settings.textH, str: str.trim() });
+      });
+      break;
+    }
+    case "dim":
+      pts.push(w);
+      if (pts.length === 3) {
+        addEntity({ type: "dim", x1: pts[0].x, y1: pts[0].y, x2: pts[1].x, y2: pts[1].y, off: dimOffsetFrom(w) });
+        pts = [];
+      }
+      break;
+    case "measure":
+      pts.push(w);
+      if (pts.length === 2) {
+        const d = Math.hypot(w.x - pts[0].x, w.y - pts[0].y);
+        toast(`距離 ${fmt(d)} mm(ΔX ${fmt(w.x - pts[0].x)}, ΔY ${fmt(w.y - pts[0].y)})`, 4000);
+        pts = [];
+      }
+      break;
+  }
+  redraw();
+});
+cv.addEventListener("mousemove", e => {
+  const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  cursorS = { x: mx, y: my };
+  if (panning) {
+    view.tx += mx - panning.mx; view.ty += my - panning.my;
+    panning = { mx, my }; redraw();
+    return;
+  }
+  let w = getSnap(mx, my);
+  const ref = pts.length ? pts[pts.length - 1] : (moveDrag ? moveDrag.lastW : null);
+  w = applyOrtho(w, ref);
+  cursorW = w;
+  $("coords").textContent = `${fmt(w.x)}, ${fmt(w.y)} mm`;
+  if (marquee) { marquee.x2 = mx; marquee.y2 = my; redraw(); return; }
+  if (moveDrag && selection.size) {
+    const dx = w.x - moveDrag.lastW.x, dy = w.y - moveDrag.lastW.y;
+    if (dx || dy) {
+      if (!moveDrag.moved) { snapshot(); moveDrag.moved = true; }
+      for (const e2 of doc.entities) if (selection.has(e2.id)) translateEntity(e2, dx, dy);
+      moveDrag.lastW = w;
+      redraw(true);
+    }
+    return;
+  }
+  redraw();
+});
+window.addEventListener("mouseup", e => {
+  if (panning) { panning = null; return; }
+  if (marquee) {
+    const m = marquee;
+    const a = s2w(Math.min(m.x1, m.x2), Math.max(m.y1, m.y2)); // 左下
+    const b = s2w(Math.max(m.x1, m.x2), Math.min(m.y1, m.y2)); // 右上
+    const crossing = m.x2 < m.x1;
+    for (const en of editableEntities()) {
+      const q = bboxCached(en);
+      const inside = q.minx >= a.x && q.maxx <= b.x && q.miny >= a.y && q.maxy <= b.y;
+      const overlap = q.maxx >= a.x && q.minx <= b.x && q.maxy >= a.y && q.miny <= b.y;
+      if (crossing ? overlap : inside) selection.add(en.id);
+    }
+    marquee = null; updateSelInfo(); redraw(true);
+  }
+  if (moveDrag) { if (moveDrag.moved) { bumpRev(); redraw(true); autosave(); } moveDrag = null; updateSelInfo(); }
+});
+cv.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const w = s2w(mx, my);
+  const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  view.scale = Math.min(1e4, Math.max(1e-5, view.scale * f));
+  view.tx = mx - w.x * view.scale;
+  view.ty = my + w.y * view.scale;
+  redraw();
+}, { passive: false });
+cv.addEventListener("dblclick", e => {
+  if (tool !== "select") return;
+  const r = cv.getBoundingClientRect();
+  const w = s2w(e.clientX - r.left, e.clientY - r.top);
+  const hit = hitTest(w);
+  if (hit && hit.type === "text") {
+    const s = w2s({ x: hit.x, y: hit.y });
+    floatInput(s.x, s.y - 30, hit.str, str => {
+      if (str.trim()) { snapshot(); hit.str = str.trim(); bbInvalidate(hit); bumpRev(); redraw(true); autosave(); }
+    });
+  }
+});
+
+// 鍵盤
+window.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+  if (e.key === " ") { spaceHeld = true; cv.style.cursor = "grab"; e.preventDefault(); return; }
+  if (e.ctrlKey && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); return; }
+  if (e.ctrlKey && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; }
+  if (e.ctrlKey && e.key.toLowerCase() === "s") { e.preventDefault(); saveFile(); return; }
+  if (e.ctrlKey && e.key.toLowerCase() === "d") { e.preventDefault(); duplicateSel(); return; }
+  if (e.key === "Escape") { cancelTool(); return; }
+  if (e.key === "Delete" || e.key === "Backspace") { deleteSel(); return; }
+  if (e.key === "Enter" && tool === "poly") { finishPoly(false); return; }
+  const map = { l: "line", r: "rect", c: "circle", a: "arc", p: "poly", t: "text", d: "dim", m: "measure", s: "select" };
+  if (!e.ctrlKey && map[e.key.toLowerCase()]) { setTool(map[e.key.toLowerCase()]); return; }
+  // 繪製中輸入數字 → 長度/半徑
+  if (/^[0-9.]$/.test(e.key) && pts.length && ["line", "circle", "poly"].includes(tool)) {
+    floatInput(cursorS.x + 15, cursorS.y + 15, e.key, val => {
+      const d = parseFloat(val);
+      if (!(d > 0)) return;
+      const last = pts[pts.length - 1];
+      if (tool === "circle") {
+        snapshotless_addCircle(last, d);
+      } else {
+        const dx = cursorW.x - last.x, dy = cursorW.y - last.y, L = Math.hypot(dx, dy) || 1;
+        const np = { x: last.x + dx / L * d, y: last.y + dy / L * d };
+        if (tool === "line") { addEntity({ type: "line", x1: last.x, y1: last.y, x2: np.x, y2: np.y }); pts = [np]; }
+        else { pts.push(np); }
+        redraw();
+      }
+    }, true);
+  }
+});
+function snapshotless_addCircle(c, r) {
+  addEntity({ type: "circle", cx: c.x, cy: c.y, r });
+  pts = [];
+}
+window.addEventListener("keyup", e => {
+  if (e.key === " ") { spaceHeld = false; cv.style.cursor = "crosshair"; }
+});
+
+// 浮動輸入框
+function floatInput(sx, sy, val, cb, isNum) {
+  const i = $("floatIn");
+  i.style.display = "block";
+  i.style.left = Math.min(sx, cv._w - 160) + "px";
+  i.style.top = Math.max(4, sy) + "px";
+  i.value = val;
+  setTimeout(() => { i.focus(); if (!isNum) i.select(); else i.setSelectionRange(i.value.length, i.value.length); }, 0);
+  i.onkeydown = ev => {
+    ev.stopPropagation();
+    if (ev.key === "Enter") { const v = i.value; hideFloat(); cb(v); }
+    if (ev.key === "Escape") hideFloat();
+  };
+}
+function hideFloat() { const i = $("floatIn"); i.style.display = "none"; i.onkeydown = null; }
+
+// ─── 選取操作 ───────────────────────────────────────────
+function deleteSel() {
+  if (!selection.size) { toast("未選取任何物件"); return; }
+  snapshot();
+  doc.entities = doc.entities.filter(e => !selection.has(e.id));
+  selection.clear(); bumpRev(); updateSelInfo(); redraw(true); autosave();
+}
+function duplicateSel() {
+  if (!selection.size) { toast("未選取任何物件"); return; }
+  snapshot();
+  const st = gridStep().minor;
+  const copies = [];
+  for (const e of doc.entities) if (selection.has(e.id)) {
+    const c = JSON.parse(JSON.stringify(e)); c.id = uid();
+    translateEntity(c, st, -st);
+    copies.push(c);
+  }
+  doc.entities.push(...copies);
+  selection = new Set(copies.map(c => c.id));
+  bumpRev(); updateSelInfo(); redraw(true); autosave();
+}
+function updateSelInfo() {
+  const n = selection.size;
+  if (!n) { $("selInfo").textContent = "未選取"; return; }
+  const sel = doc.entities.filter(e => selection.has(e.id));
+  let html = `已選取 ${n} 個物件`;
+  if (n === 1) {
+    const e = sel[0];
+    const names = { line: "線段", rect: "矩形", circle: "圓", arc: "圓弧", poly: "折線", text: "文字", dim: "標註" };
+    html += `<br>${names[e.type]}(圖層 ${e.layer})`;
+    if (e.type === "line") html += `<br>長度 ${fmt(Math.hypot(e.x2 - e.x1, e.y2 - e.y1))} mm`;
+    if (e.type === "rect") html += `<br>${fmt(e.w)} × ${fmt(e.h)} mm`;
+    if (e.type === "circle") html += `<br>半徑 ${fmt(e.r)} mm`;
+    if (e.type === "text") html += `<br>「${e.str}」`;
+  }
+  $("selInfo").innerHTML = html;
+}
+
+// ─── 圖層 ───────────────────────────────────────────────
+function renderLayers() {
+  const el = $("layerList"); el.innerHTML = "";
+  for (const l of doc.layers) {
+    const row = document.createElement("div");
+    row.className = "layerRow" + (l.name === currentLayer ? " current" : "");
+    const eye = document.createElement("span"); eye.className = "icon" + (l.visible ? "" : " off"); eye.textContent = "👁"; eye.title = "顯示/隱藏";
+    eye.onclick = ev => { ev.stopPropagation(); l.visible = !l.visible; bumpRev(); renderLayers(); redraw(true); autosave(); };
+    const lock = document.createElement("span"); lock.className = "icon" + (l.locked ? "" : " off"); lock.textContent = "🔒"; lock.title = "鎖定";
+    lock.onclick = ev => { ev.stopPropagation(); l.locked = !l.locked; bumpRev(); renderLayers(); autosave(); };
+    const col = document.createElement("input"); col.type = "color"; col.value = l.color;
+    col.onclick = ev => ev.stopPropagation();
+    col.oninput = () => { l.color = col.value; bumpRev(); redraw(true); autosave(); };
+    const nm = document.createElement("span"); nm.className = "lname"; nm.textContent = l.name; nm.title = l.name;
+    const del = document.createElement("span"); del.className = "icon"; del.textContent = "✕"; del.title = "刪除圖層";
+    del.onclick = ev => {
+      ev.stopPropagation();
+      if (doc.layers.length <= 1) { toast("至少要保留一個圖層"); return; }
+      if (doc.entities.some(e => e.layer === l.name)) { toast("圖層内還有物件,無法刪除"); return; }
+      snapshot();
+      doc.layers = doc.layers.filter(x => x !== l);
+      if (currentLayer === l.name) currentLayer = doc.layers[0].name;
+      bumpRev(); renderLayers(); redraw(true); autosave();
+    };
+    row.onclick = () => { currentLayer = l.name; renderLayers(); };
+    row.append(eye, lock, col, nm, del);
+    el.appendChild(row);
+  }
+}
+$("btnAddLayer").onclick = () => {
+  const name = prompt("圖層名稱:", "圖層" + doc.layers.length);
+  if (!name) return;
+  if (doc.layers.some(l => l.name === name)) { toast("圖層名稱重複"); return; }
+  snapshot();
+  const palette = ["#f2d024", "#4da3ff", "#7fdc7f", "#e06060", "#c792ea", "#6ee7d8"];
+  doc.layers.push({ name, color: palette[(doc.layers.length - 1) % palette.length], visible: true, locked: false });
+  currentLayer = name;
+  bumpRev(); renderLayers(); autosave();
+};
+
+// ─── 視圖 ───────────────────────────────────────────────
+function zoomExtents() {
+  const b = extents();
+  if (!b) { view.scale = 1; view.tx = 60; view.ty = cv._h - 60; redraw(true); return; }
+  const mw = b.maxx - b.minx || 100, mh = b.maxy - b.miny || 100;
+  view.scale = Math.min((cv._w - 100) / mw, (cv._h - 100) / mh);
+  view.scale = Math.min(1e4, Math.max(1e-5, view.scale));
+  view.tx = cv._w / 2 - (b.minx + mw / 2) * view.scale;
+  view.ty = cv._h / 2 + (b.miny + mh / 2) * view.scale;
+  redraw(true);
+}
+
+// ─── 檔案 ───────────────────────────────────────────────
+function download(name, content, mime) {
+  const blob = content instanceof Blob ? content : new Blob([content], { type: mime || "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+function stamp() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+}
+function saveFile() {
+  download(`圖面-${stamp()}.json`, JSON.stringify(doc, null, 1), "application/json");
+  toast("已下載專案檔(.json)");
+}
+function maxId(list) { // 不可用 Math.max(...list):數十萬個參數會堆疊溢位
+  let m = 0;
+  for (const e of list) if (e.id > m) m = e.id;
+  return m;
+}
+function openFile(file) {
+  const rd = new FileReader();
+  rd.onload = () => {
+    let o;
+    try {
+      o = JSON.parse(rd.result);
+      if (!Array.isArray(o.entities) || !Array.isArray(o.layers) || !o.layers.length) throw 0;
+    } catch { toast("檔案格式錯誤,無法開啟(要選 .json 專案檔,不是 DWG/DXF)"); return; }
+    try {
+      snapshot();
+      doc = o;
+      doc.settings = doc.settings || { textH: 3.5, dimH: 3.5 };
+      currentLayer = doc.layers[0].name;
+      idSeq = maxId(doc.entities) + 1;
+      selection.clear(); bumpRev(); syncSettingsUI(); renderLayers(); zoomExtents(); autosave();
+      toast("已開啟:" + file.name + "(" + doc.entities.length + " 個圖元)");
+    } catch (err) {
+      console.error(err);
+      toast("開啟時發生錯誤:" + (err && err.message ? err.message : err), 6000);
+    }
+  };
+  rd.readAsText(file);
+}
+let autosaveTimer = null, autosaveWarned = false;
+function autosave() { // 大圖 stringify 很貴,延遲合併寫入
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(() => {
+    try { localStorage.setItem("cad-autosave", JSON.stringify(doc)); }
+    catch {
+      if (!autosaveWarned) { autosaveWarned = true; toast("圖面太大,瀏覽器自動儲存已停用 — 請記得用「儲存」下載專案檔", 6000); }
+    }
+  }, 800);
+}
+function loadAutosave() {
+  try {
+    const s = localStorage.getItem("cad-autosave");
+    if (!s) return false;
+    const o = JSON.parse(s);
+    if (!o.entities || !o.layers) return false;
+    doc = o;
+    doc.settings = doc.settings || { textH: 3.5, dimH: 3.5 };
+    currentLayer = doc.layers[0].name;
+    idSeq = maxId(doc.entities) + 1;
+    return doc.entities.length > 0;
+  } catch { return false; }
+}
+
+// ─── SVG 匯出(檔案與列印共用) ─────────────────────────
+function arcToPolyPts(e) {
+  const sweep = norm2pi(e.a2 - e.a1) || 2 * Math.PI;
+  const n = Math.max(8, Math.ceil(sweep / (Math.PI / 32)));
+  const pts2 = [];
+  for (let i = 0; i <= n; i++) {
+    const a = e.a1 + sweep * i / n;
+    pts2.push([e.cx + e.r * Math.cos(a), e.cy + e.r * Math.sin(a)]);
+  }
+  return pts2;
+}
+function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+function svgEntity(e, tf, color, sw) {
+  // tf: 世界座標 → SVG 座標 [x,y](y 已翻轉)
+  const P = (x, y) => tf({ x, y });
+  const attr = `stroke="${color}" stroke-width="${sw}" fill="none" stroke-linecap="round" stroke-linejoin="round"`;
+  switch (e.type) {
+    case "line": { const a = P(e.x1, e.y1), b = P(e.x2, e.y2); return `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" ${attr}/>`; }
+    case "rect": case "poly": {
+      const src = e.type === "rect"
+        ? [[e.x, e.y], [e.x + e.w, e.y], [e.x + e.w, e.y + e.h], [e.x, e.y + e.h]]
+        : e.pts;
+      const closed = e.type === "rect" || e.closed;
+      const d = src.map(q => P(q[0], q[1]).join(",")).join(" ");
+      return `<${closed ? "polygon" : "polyline"} points="${d}" ${attr}/>`;
+    }
+    case "circle": { const c = P(e.cx, e.cy); return `<circle cx="${c[0]}" cy="${c[1]}" r="${e.r}" ${attr}/>`; }
+    case "arc": {
+      const d = arcToPolyPts(e).map(q => P(q[0], q[1]).join(",")).join(" ");
+      return `<polyline points="${d}" ${attr}/>`;
+    }
+    case "text": {
+      const a = P(e.x, e.y);
+      return `<text x="${a[0]}" y="${a[1]}" font-size="${e.h}" fill="${color}" font-family="Microsoft JhengHei,sans-serif">${esc(e.str)}</text>`;
+    }
+    case "dim": {
+      const g = dimPrimitives(e);
+      let out = "";
+      for (const s of g.lines) { const a = P(s[0].x, s[0].y), b = P(s[1].x, s[1].y); out += `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" ${attr}/>`; }
+      for (const t of g.tris) out += `<polygon points="${t.map(q => P(q.x, q.y).join(",")).join(" ")}" fill="${color}"/>`;
+      const a = P(g.text.x, g.text.y);
+      const deg = -g.text.ang * 180 / Math.PI;
+      out += `<text x="${a[0]}" y="${a[1]}" font-size="${g.text.h}" fill="${color}" text-anchor="middle" font-family="Microsoft JhengHei,sans-serif" transform="rotate(${fmt(deg)} ${a[0]} ${a[1]})">${esc(g.text.str)}</text>`;
+      return out;
+    }
+  }
+  return "";
+}
+function svgString(opts) {
+  // opts:{forPrint,paperW,paperH,margin,scaleN(null=fit),title,name,dark}
+  const b = extents();
+  if (!b) return null;
+  const o = opts || {};
+  const pad = Math.max((b.maxx - b.minx), (b.maxy - b.miny)) * 0.03 + 2;
+  const dw = (b.maxx - b.minx) + pad * 2, dh = (b.maxy - b.miny) + pad * 2;
+  const dcx = (b.minx + b.maxx) / 2, dcy = (b.miny + b.maxy) / 2;
+  let W, H, vbW, vbH, sw, titleH = 0;
+  if (o.forPrint) {
+    W = o.paperW; H = o.paperH;
+    const m = o.margin != null ? o.margin : 10;
+    titleH = o.title ? 16 : 0;
+    const pw = W - m * 2, ph = H - m * 2 - titleH;
+    let scaleN = o.scaleN; // 1mm 圖 = 1/scaleN mm 紙
+    if (!scaleN) scaleN = Math.max(dw / pw, dh / ph);
+    vbW = W * scaleN; vbH = H * scaleN;
+    sw = 0.35 * scaleN; // 紙上約 0.35mm 線寬
+    // viewBox 置中於圖面中心,並讓標題欄留白落在下方
+    var vbX = dcx - vbW / 2;
+    var vbY = dcy - vbH / 2 - (titleH / 2) * scaleN;
+    var els = [];
+    for (const e of visibleEntities()) {
+      const col = o.dark ? layerOf(e).color : printColor(layerOf(e).color);
+      els.push(svgEntity(e, p => [fmt(p.x), fmt(2 * dcy - p.y)], col, sw));
+    }
+    // y 翻轉:用 y' = 2*dcy - y(繞圖心翻轉,viewBox 不變)
+    let inner = els.join("\n");
+    let title = "";
+    if (o.title) {
+      const m2 = m * scaleN;
+      const tx1 = vbX + vbW - m2 - 90 * scaleN, ty1 = vbY + vbH - m2 - titleH * scaleN;
+      const fw = 90 * scaleN, fh = titleH * scaleN, fs = 4.2 * scaleN;
+      title = `<g><rect x="${fmt(tx1)}" y="${fmt(ty1)}" width="${fmt(fw)}" height="${fmt(fh)}" fill="none" stroke="#000" stroke-width="${sw}"/>` +
+        `<line x1="${fmt(tx1)}" y1="${fmt(ty1 + fh / 2)}" x2="${fmt(tx1 + fw)}" y2="${fmt(ty1 + fh / 2)}" stroke="#000" stroke-width="${sw * 0.7}"/>` +
+        `<text x="${fmt(tx1 + 2 * scaleN)}" y="${fmt(ty1 + fh * 0.38)}" font-size="${fmt(fs)}" font-family="Microsoft JhengHei,sans-serif">圖名:${esc(o.name || "")}</text>` +
+        `<text x="${fmt(tx1 + 2 * scaleN)}" y="${fmt(ty1 + fh * 0.88)}" font-size="${fmt(fs)}" font-family="Microsoft JhengHei,sans-serif">比例 ${o.scaleN ? "1:" + o.scaleN : "符合頁面"}  單位 mm  ${o.date || ""}</text></g>`;
+    }
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}mm" height="${H}mm" viewBox="${fmt(vbX)} ${fmt(vbY)} ${fmt(vbW)} ${fmt(vbH)}">` +
+      `<rect x="${fmt(vbX)}" y="${fmt(vbY)}" width="${fmt(vbW)}" height="${fmt(vbH)}" fill="#fff"/>` + inner + title + `</svg>`;
+  }
+  // 一般 SVG 檔匯出:1 使用者單位 = 1mm
+  const tf = p => [fmt(p.x - b.minx + pad), fmt(b.maxy - p.y + pad)];
+  sw = Math.max(dw, dh) / 600;
+  const els2 = visibleEntities().map(e => svgEntity(e, tf, printColor(layerOf(e).color), sw));
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(dw)}mm" height="${fmt(dh)}mm" viewBox="0 0 ${fmt(dw)} ${fmt(dh)}">` +
+    `<rect width="100%" height="100%" fill="#fff"/>` + els2.join("\n") + `</svg>`;
+}
+function printColor(c) { // 淺色圖層印在白紙上改深色
+  const r = parseInt(c.slice(1, 3), 16), g = parseInt(c.slice(3, 5), 16), bl = parseInt(c.slice(5, 7), 16);
+  const lum = 0.299 * r + 0.587 * g + 0.114 * bl;
+  return lum > 190 ? "#000000" : c;
+}
+
+// ─── DXF R12 匯出 ───────────────────────────────────────
+function aciColor(hex) {
+  const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+  const basic = [[255, 0, 0, 1], [255, 255, 0, 2], [0, 255, 0, 3], [0, 255, 255, 4], [0, 0, 255, 5], [255, 0, 255, 6], [255, 255, 255, 7]];
+  let best = 7, bd = Infinity;
+  for (const [br, bg, bb, i] of basic) {
+    const d = (r - br) ** 2 + (g - bg) ** 2 + (b - bb) ** 2;
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
+function dxfEsc(s) { // R12 無法存 UTF-8:非 ASCII 轉 AutoCAD \U+XXXX 跳脫(ezdxf.decode_dxf_unicode 可還原)
+  return String(s).replace(/[^\x20-\x7E]/g, ch => "\\U+" + ch.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0"));
+}
+function dxfString() {
+  const L = [];
+  const G = (c, v) => { L.push(String(c), String(v)); };
+  const deg = a => (norm2pi(a) * 180 / Math.PI);
+  G(0, "SECTION"); G(2, "HEADER");
+  G(9, "$ACADVER"); G(1, "AC1009");
+  G(9, "$INSUNITS"); G(70, 4); // mm
+  G(0, "ENDSEC");
+  G(0, "SECTION"); G(2, "TABLES");
+  G(0, "TABLE"); G(2, "LAYER"); G(70, doc.layers.length);
+  for (const l of doc.layers) {
+    G(0, "LAYER"); G(2, dxfEsc(l.name)); G(70, 0); G(62, aciColor(l.color)); G(6, "CONTINUOUS");
+  }
+  G(0, "ENDTAB"); G(0, "ENDSEC");
+  G(0, "SECTION"); G(2, "ENTITIES");
+  const line = (x1, y1, x2, y2, ly) => { G(0, "LINE"); G(8, ly); G(10, fmt(x1)); G(20, fmt(y1)); G(11, fmt(x2)); G(21, fmt(y2)); };
+  const text = (x, y, h, str, ly, ang) => {
+    G(0, "TEXT"); G(8, ly); G(10, fmt(x)); G(20, fmt(y)); G(40, fmt(h)); G(1, dxfEsc(str));
+    if (ang) G(50, fmt(ang));
+  };
+  for (const e of doc.entities) {
+    const ly = dxfEsc(e.layer);
+    switch (e.type) {
+      case "line": line(e.x1, e.y1, e.x2, e.y2, ly); break;
+      case "circle": G(0, "CIRCLE"); G(8, ly); G(10, fmt(e.cx)); G(20, fmt(e.cy)); G(40, fmt(e.r)); break;
+      case "arc": G(0, "ARC"); G(8, ly); G(10, fmt(e.cx)); G(20, fmt(e.cy)); G(40, fmt(e.r)); G(50, fmt(deg(e.a1))); G(51, fmt(deg(e.a2))); break;
+      case "rect": case "poly": {
+        const src = e.type === "rect"
+          ? [[e.x, e.y], [e.x + e.w, e.y], [e.x + e.w, e.y + e.h], [e.x, e.y + e.h]]
+          : e.pts;
+        const closed = e.type === "rect" || e.closed;
+        G(0, "POLYLINE"); G(8, ly); G(66, 1); G(70, closed ? 1 : 0);
+        for (const q of src) { G(0, "VERTEX"); G(8, ly); G(10, fmt(q[0])); G(20, fmt(q[1])); }
+        G(0, "SEQEND");
+        break;
+      }
+      case "text": text(e.x, e.y, e.h, e.str, ly); break;
+      case "dim": { // 分解為線+箭頭(線)+文字
+        const g = dimPrimitives(e);
+        for (const s of g.lines) line(s[0].x, s[0].y, s[1].x, s[1].y, ly);
+        for (const t of g.tris) {
+          line(t[0].x, t[0].y, t[1].x, t[1].y, ly);
+          line(t[1].x, t[1].y, t[2].x, t[2].y, ly);
+          line(t[2].x, t[2].y, t[0].x, t[0].y, ly);
+        }
+        const halfW = g.text.str.length * g.text.h * 0.35;
+        text(g.text.x - halfW * Math.cos(g.text.ang), g.text.y - halfW * Math.sin(g.text.ang),
+          g.text.h, g.text.str, ly, g.text.ang * 180 / Math.PI);
+        break;
+      }
+    }
+  }
+  G(0, "ENDSEC"); G(0, "EOF");
+  return L.join("\r\n") + "\r\n";
+}
+
+// ─── PNG 匯出 ───────────────────────────────────────────
+function exportPng() {
+  const b = extents();
+  if (!b) { toast("沒有圖形可匯出"); return; }
+  const pad = Math.max(b.maxx - b.minx, b.maxy - b.miny) * 0.04 + 2;
+  const dw = b.maxx - b.minx + pad * 2, dh = b.maxy - b.miny + pad * 2;
+  const long = 2400;
+  const sc = long / Math.max(dw, dh);
+  const c2 = document.createElement("canvas");
+  c2.width = Math.round(dw * sc); c2.height = Math.round(dh * sc);
+  const cx2 = c2.getContext("2d");
+  cx2.fillStyle = "#ffffff"; cx2.fillRect(0, 0, c2.width, c2.height);
+  const vw = { scale: sc, tx: -(b.minx - pad) * sc, ty: (b.maxy + pad) * sc };
+  cx2.lineWidth = Math.max(1.2, sc * 0.35);
+  for (const e of visibleEntities()) {
+    const col = printColor(layerOf(e).color);
+    cx2.strokeStyle = col; cx2.fillStyle = col;
+    strokeEntity(cx2, e, vw);
+  }
+  c2.toBlob(bl => download(`圖面-${stamp()}.png`, bl), "image/png");
+  toast("已下載 PNG");
+}
+
+// ─── 列印 / PDF ─────────────────────────────────────────
+const PAPERS = { A4: [210, 297], A3: [297, 420] };
+function printOpts() {
+  const [pw, ph] = PAPERS[$("pPaper").value];
+  const land = $("pOrient").value === "landscape";
+  const sv = $("pScale").value;
+  const d = new Date();
+  return {
+    forPrint: true,
+    paperW: land ? Math.max(pw, ph) : Math.min(pw, ph),
+    paperH: land ? Math.min(pw, ph) : Math.max(pw, ph),
+    margin: 10,
+    scaleN: sv === "fit" ? null : parseFloat(sv),
+    title: $("pTitle").checked,
+    name: $("pName").value,
+    date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
+  };
+}
+function refreshPreview() {
+  const o = printOpts();
+  const s = svgString(o);
+  const wrap = $("previewWrap");
+  if (!s) { wrap.innerHTML = "<div style='color:#ddd'>沒有圖形</div>"; return; }
+  wrap.innerHTML = s;
+  const svg = wrap.firstElementChild;
+  // 預覽縮小顯示
+  const maxW = wrap.clientWidth - 24, maxH = wrap.clientHeight - 24;
+  const k = Math.min(maxW / o.paperW, maxH / o.paperH, 3);
+  svg.setAttribute("width", (o.paperW * k) + "px");
+  svg.setAttribute("height", (o.paperH * k) + "px");
+}
+$("btnPdf").onclick = () => {
+  if (!visibleEntities().length) { toast("沒有圖形可匯出,請先繪製"); return; }
+  $("printModal").style.display = "flex";
+  refreshPreview();
+};
+$("btnClosePrint").onclick = () => $("printModal").style.display = "none";
+for (const id of ["pPaper", "pOrient", "pScale", "pTitle", "pName"]) $(id).addEventListener("input", refreshPreview);
+$("btnDoPrint").onclick = () => {
+  const o = printOpts();
+  const s = svgString(o);
+  if (!s) return;
+  $("printArea").innerHTML = s;
+  let st = $("pageStyle");
+  if (!st) { st = document.createElement("style"); st.id = "pageStyle"; document.head.appendChild(st); }
+  st.textContent = `@page{size:${o.paperW}mm ${o.paperH}mm; margin:0;}`;
+  window.print();
+};
+window.addEventListener("afterprint", () => { $("printArea").innerHTML = ""; });
+
+// ─── 上方按鈕 ───────────────────────────────────────────
+$("btnNew").onclick = () => {
+  if (doc.entities.length && !confirm("確定開新檔?未儲存的內容會被清除(可先按「儲存」)")) return;
+  doc = DEFAULT_DOC(); currentLayer = "0"; selection.clear();
+  undoStack = []; redoStack = []; idSeq = 1;
+  bumpRev(); syncSettingsUI(); renderLayers(); redraw(true); autosave();
+};
+$("btnOpen").onclick = () => $("fileIn").click();
+$("fileIn").onchange = e => { if (e.target.files[0]) openFile(e.target.files[0]); e.target.value = ""; };
+$("btnSave").onclick = saveFile;
+$("btnUndo").onclick = undo;
+$("btnRedo").onclick = redo;
+$("btnZoomExt").onclick = zoomExtents;
+$("btnSvg").onclick = () => {
+  const s = svgString();
+  if (!s) { toast("沒有圖形可匯出"); return; }
+  download(`圖面-${stamp()}.svg`, s, "image/svg+xml");
+  toast("已下載 SVG");
+};
+$("btnPng").onclick = exportPng;
+$("btnDxf").onclick = () => {
+  if (!doc.entities.length) { toast("沒有圖形可匯出"); return; }
+  download(`圖面-${stamp()}.dxf`, dxfString(), "application/dxf");
+  toast("已下載 DXF(R12,可用 AutoCAD/ezdxf 開啟)");
+};
+$("btnDel").onclick = deleteSel;
+$("btnDup").onclick = duplicateSel;
+document.querySelectorAll("#toolbox [data-tool]").forEach(b => b.onclick = () => setTool(b.dataset.tool));
+
+// 設定
+function syncSettingsUI() {
+  $("inTextH").value = doc.settings.textH;
+  $("inDimH").value = doc.settings.dimH;
+}
+$("inTextH").oninput = () => { const v = parseFloat($("inTextH").value); if (v > 0) { doc.settings.textH = v; autosave(); } };
+$("inDimH").oninput = () => { const v = parseFloat($("inDimH").value); if (v > 0) { doc.settings.dimH = v; bbCache = new WeakMap(); bumpRev(); redraw(true); autosave(); } };
+$("btnAutoH").onclick = () => {
+  const b = extents();
+  if (!b) { toast("圖面是空的"); return; }
+  const h = Math.max(2.5, parseFloat(((Math.max(b.maxx - b.minx, b.maxy - b.miny)) / 70).toFixed(1)));
+  doc.settings.textH = h; doc.settings.dimH = h;
+  syncSettingsUI(); redraw(true); autosave();
+  toast(`字高已設為 ${h} mm`);
+};
+["chkGrid", "chkSnapGrid", "chkOsnap", "chkOrtho"].forEach(id => $(id).onchange = () => redraw(true));
+
+// ─── 啟動 ───────────────────────────────────────────────
+window.addEventListener("resize", resizeCanvas);
+const restored = loadAutosave();
+syncSettingsUI();
+renderLayers();
+resizeCanvas();
+if (restored) { zoomExtents(); toast("已還原上次的圖面(自動儲存)"); }
+setTool("select");
+
+// 測試/自動化掛鉤(也方便未來擴充)
+window.CAD = {
+  get doc() { return doc; }, get view() { return view; }, get selection() { return selection; },
+  addEntity, redraw, undo, redo, setTool, zoomExtents, extents,
+  svgString, dxfString, dimPrimitives, hitTest, s2w, w2s, strokeEntity,
+  setDoc(o) { doc = o; currentLayer = doc.layers[0].name; bumpRev(); renderLayers(); redraw(true); },
+};
+</script>
+</body>
+</html>
