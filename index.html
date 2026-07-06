@@ -119,7 +119,7 @@ button.primary:hover{background:#3182ce;}
     <button id="btnPng" class="desktop-only">PNG</button>
     <button id="btnDxf">DXF</button>
     <button id="btnPanel" class="mobile-only">☰ 圖層</button>
-    <input type="file" id="fileIn" accept=".json,.dxf" style="display:none">
+    <input type="file" id="fileIn" accept=".json,.dxf,.dwg" style="display:none">
   </div>
   <div id="main">
     <div id="toolbox">
@@ -268,7 +268,7 @@ function buildSpatial() { // 均勻網格:鎖點/點選只查游標附近
   const list = visibleEntities();
   let b = { minx: 0, miny: 0, maxx: 1, maxy: 1 };
   if (list.length) b = extents(list) || b;
-  const cs = Math.max(b.maxx - b.minx, b.maxy - b.miny, 1) / 96;
+  const cs = Math.max(b.maxx - b.minx, b.maxy - b.miny, 100) / 96;
   const map = new Map(), big = [];
   for (const e of list) {
     const q = bboxCached(e);
@@ -288,6 +288,8 @@ function nearEntities(w, tw) { // 游標附近(世界座標 ± tw)的可見物�
   const cs = spatial.cs, out = [], seen = new Set();
   const x0 = Math.floor((w.x - tw) / cs), x1 = Math.floor((w.x + tw) / cs);
   const y0 = Math.floor((w.y - tw) / cs), y1 = Math.floor((w.y + tw) / cs);
+  // 視圖縮很小時 tw(世界單位)可能極大 → 掃描格數爆炸,退回全清單
+  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 4096) return visibleEntities();
   for (let gx = x0; gx <= x1; gx++) for (let gy = y0; gy <= y1; gy++) {
     const a = spatial.map.get(gx + "," + gy);
     if (a) for (const e of a) if (!seen.has(e.id)) { seen.add(e.id); out.push(e); }
@@ -1199,8 +1201,48 @@ function applyLoadedDoc(o, label) {
     toast("開啟時發生錯誤:" + (err && err.message ? err.message : err), 6000);
   }
 }
+// ─── DWG 直接開啟(GNU LibreDWG WebAssembly,需 http/https 環境) ───
+let ldwgLib = null;
+function loadScript(url) {
+  return new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = url; s.onload = res; s.onerror = () => rej(new Error("下載失敗:" + url));
+    document.head.appendChild(s);
+  });
+}
+async function openDwgFile(file) {
+  if (location.protocol === "file:") {
+    toast("本機直接雙擊模式無法開 DWG。請改用網頁版(GitHub Pages 網址),或把 DWG 拖到「把DWG拖到這裡轉檔.bat」", 9000);
+    return;
+  }
+  if (file.size > 60 * 1024 * 1024) { toast("DWG 超過 60MB,瀏覽器吃不下,請在電腦轉檔", 7000); return; }
+  try {
+    if (!ldwgLib) {
+      toast("首次載入 DWG 解析引擎(約 9MB)…", 6000);
+      const m = await import("./libredwg/libredwg-web.js");
+      window.createModule = m.default;
+      await loadScript("libredwg/libredwg-web-wrapper.js");
+      ldwgLib = await window["libredwg-web"].LibreDwg.create("libredwg");
+    }
+    toast("DWG 解析中…(大檔要幾十秒,畫面凍結是正常的)", 8000);
+    await new Promise(r => setTimeout(r, 80)); // 讓 toast 先畫出來
+    const pkg = window["libredwg-web"];
+    const buf = await file.arrayBuffer();
+    const dwg = ldwgLib.dwg_read_data(buf, pkg.Dwg_File_Type.DWG);
+    if (!dwg) throw new Error("無法解讀(檔案損壞或版本不支援)");
+    const db = ldwgLib.convert(dwg);
+    try { ldwgLib.dwg_free(dwg); } catch { }
+    const res = dwgDbToDoc(db);
+    if (!res.doc.entities.length) throw new Error("讀到 0 個圖元(版本可能不支援)");
+    applyLoadedDoc(res.doc, file.name + (res.skipped ? `,略過 ${res.skipped} 個不支援物件` : ""));
+  } catch (err) {
+    console.error(err);
+    toast("DWG 解析失敗:" + (err && err.message ? err.message : err) + " — 可請對方改存 DXF 再傳", 9000);
+  }
+}
 function openFile(file) {
   const rd = new FileReader();
+  if (/\.dwg$/i.test(file.name || "")) { openDwgFile(file); return; }
   if (/\.dxf$/i.test(file.name || "")) { // DXF 直接開(手機免轉檔)
     if (file.size > 120 * 1024 * 1024) { toast("DXF 超過 120MB,瀏覽器吃不下 — 請在電腦用拖曳轉檔做成 .json", 7000); return; }
     toast("解析 DXF 中…(大檔要幾十秒)", 8000);
@@ -1264,6 +1306,51 @@ function aciHex2(c) { // ACI 色號 → 近似 hex
   }
   return "#e8e8e8";
 }
+// ── DXF/DWG 匯入共用幾何工具(仿射矩陣 / 凸度弧 / 圓弧細分 / 文字處理) ──
+const M0 = [1, 0, 0, 1, 0, 0]; // x'=a x+c y+e ; y'=b x+d y+f
+const mmul = (m, n) => [
+  m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1],
+  m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
+  m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
+const ap = (M, x, y) => [M[0] * x + M[2] * y + M[4], M[1] * x + M[3] * y + M[5]];
+const uni = M => Math.abs(Math.hypot(M[0], M[1]) - Math.hypot(M[2], M[3])) < 1e-6 && (M[0] * M[3] - M[1] * M[2]) > 0;
+const mSc = M => Math.hypot(M[0], M[1]) || 1;
+const mRot = M => Math.atan2(M[1], M[0]);
+const deU = s => s.replace(/\\U\+([0-9A-Fa-f]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+const mplain = s => deU(s).replace(/\\P/g, " ").replace(/\\[A-Za-z][^;\\{}]*;/g, "").replace(/[{}]/g, "");
+function bulgeSeg(a, b) {
+  const bg = a[2] || 0;
+  if (!bg) return [[b[0], b[1]]];
+  const th = 4 * Math.atan(bg);
+  const chord = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  if (chord < 1e-12) return [[b[0], b[1]]];
+  const r = chord / (2 * Math.sin(th / 2)); // 有號
+  const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+  const nx = -(b[1] - a[1]) / chord, ny = (b[0] - a[0]) / chord;
+  const h = r * Math.cos(th / 2);
+  const cx = mx - nx * h, cy = my - ny * h;
+  const a1 = Math.atan2(a[1] - cy, a[0] - cx);
+  const n = Math.max(4, Math.ceil(Math.abs(th) / (Math.PI / 24)));
+  const seg = [];
+  for (let i = 1; i <= n; i++) {
+    const t = a1 + th * i / n;
+    seg.push([cx + Math.abs(r) * Math.cos(t), cy + Math.abs(r) * Math.sin(t)]);
+  }
+  seg[seg.length - 1] = [b[0], b[1]];
+  return seg;
+}
+function bulgeChain(vs) { // [[x,y,bulge],...] → 展平後點列
+  const p = [[vs[0][0], vs[0][1]]];
+  for (let i = 0; i < vs.length - 1; i++) p.push(...bulgeSeg(vs[i], vs[i + 1]));
+  return p;
+}
+function tessArcPts(cx, cy, r, a1, sweep) {
+  const n = Math.max(8, Math.ceil(Math.abs(sweep) / (Math.PI / 32)));
+  const p = [];
+  for (let i = 0; i <= n; i++) { const t = a1 + sweep * i / n; p.push([cx + r * Math.cos(t), cy + r * Math.sin(t)]); }
+  return p;
+}
+
 function dxfToDoc(buf) {
   // 編碼:AC1021(2007)以上規格強制 UTF-8;更舊的才看 $DWGCODEPAGE(常見 Big5/GBK)
   let text = new TextDecoder("utf-8").decode(buf);
@@ -1278,8 +1365,6 @@ function dxfToDoc(buf) {
   const L = text.split(/\r\n|\n|\r/);
   text = null;
   let pos = 0;
-  const deU = s => s.replace(/\\U\+([0-9A-Fa-f]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
-  const mplain = s => deU(s).replace(/\\P/g, " ").replace(/\\[A-Za-z][^;\\{}]*;/g, "").replace(/[{}]/g, "");
 
   function readRaw(type) { // 讀一個實體的所有碼(保留順序供 LWPOLYLINE bulge 對位)
     const c = new Map(), seq = [];
@@ -1328,16 +1413,6 @@ function dxfToDoc(buf) {
   }
 
   // ── 轉換(含仿射變換,供 INSERT/DIMENSION 圖塊展開) ──
-  const M0 = [1, 0, 0, 1, 0, 0]; // x'=a x+c y+e ; y'=b x+d y+f
-  const mmul = (m, n) => [
-    m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1],
-    m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
-    m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
-  const ap = (M, x, y) => [M[0] * x + M[2] * y + M[4], M[1] * x + M[3] * y + M[5]];
-  const uni = M => Math.abs(Math.hypot(M[0], M[1]) - Math.hypot(M[2], M[3])) < 1e-6 && (M[0] * M[3] - M[1] * M[2]) > 0;
-  const mSc = M => Math.hypot(M[0], M[1]) || 1;
-  const mRot = M => Math.atan2(M[1], M[0]);
-
   const out = [];
   let skipped = 0;
   const MAXE = 300000;
@@ -1345,38 +1420,6 @@ function dxfToDoc(buf) {
     if (out.length >= MAXE) { skipped++; return; }
     ent.id = out.length + 1; ent.layer = layer;
     out.push(ent);
-  }
-  function bulgeChain(vs) { // [[x,y,bulge],...] → 展平後點列
-    const p = [[vs[0][0], vs[0][1]]];
-    for (let i = 0; i < vs.length - 1; i++) p.push(...bulgeSeg(vs[i], vs[i + 1]));
-    return p;
-  }
-  function bulgeSeg(a, b) {
-    const bg = a[2] || 0;
-    if (!bg) return [[b[0], b[1]]];
-    const th = 4 * Math.atan(bg);
-    const chord = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    if (chord < 1e-12) return [[b[0], b[1]]];
-    const r = chord / (2 * Math.sin(th / 2)); // 有號
-    const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
-    const nx = -(b[1] - a[1]) / chord, ny = (b[0] - a[0]) / chord;
-    const h = r * Math.cos(th / 2);
-    const cx = mx - nx * h, cy = my - ny * h;
-    const a1 = Math.atan2(a[1] - cy, a[0] - cx);
-    const n = Math.max(4, Math.ceil(Math.abs(th) / (Math.PI / 24)));
-    const seg = [];
-    for (let i = 1; i <= n; i++) {
-      const t = a1 + th * i / n;
-      seg.push([cx + Math.abs(r) * Math.cos(t), cy + Math.abs(r) * Math.sin(t)]);
-    }
-    seg[seg.length - 1] = [b[0], b[1]];
-    return seg;
-  }
-  function tessArcPts(cx, cy, r, a1, sweep) {
-    const n = Math.max(8, Math.ceil(Math.abs(sweep) / (Math.PI / 32)));
-    const p = [];
-    for (let i = 0; i <= n; i++) { const t = a1 + sweep * i / n; p.push([cx + r * Math.cos(t), cy + r * Math.sin(t)]); }
-    return p;
   }
   const lay = (r, parentLayer) => {
     const nm = deU(gs(r, 8, "0"));
@@ -1518,6 +1561,149 @@ function dxfToDoc(buf) {
   }
   if (!layerRows.length) layerRows.push({ name: "0", color: "#e8e8e8", visible: true, locked: false });
   for (const l of layerRows) l.locked = false; // 匯入後全部解鎖,避免「看得到點不到」
+  if (out.length >= MAXE) toast(`圖太大,已達 ${MAXE} 圖元上限,後面的被截掉`, 7000);
+  return {
+    doc: { version: 1, units: "mm", layers: layerRows, entities: out, settings: { textH: 3.5, dimH: 3.5 } },
+    skipped,
+  };
+}
+
+// ─── DWG 資料庫 → 本軟體文件(libredwg-web 的 DwgDatabase 結構) ───
+function dwgDbToDoc(db) {
+  const out = [];
+  let skipped = 0;
+  const MAXE = 300000;
+  const emit = (ent, layer) => {
+    if (out.length >= MAXE) { skipped++; return; }
+    ent.id = out.length + 1; ent.layer = layer || "0";
+    out.push(ent);
+  };
+  const blocks = new Map();
+  const brEntries = (db.tables && db.tables.BLOCK_RECORD && db.tables.BLOCK_RECORD.entries) || [];
+  for (const b of brEntries) blocks.set(b.name, b);
+  const P = (M, p) => ap(M, (p && p.x) || 0, (p && p.y) || 0);
+
+  function convEnt(e, Min, parentLayer, depth) {
+    const ly = (e.layer && e.layer !== "0") ? e.layer : (parentLayer || "0");
+    const M = (e.extrusionDirection && e.extrusionDirection.z < 0) ? mmul(Min, [-1, 0, 0, 1, 0, 0]) : Min;
+    switch (e.type) {
+      case "LINE": {
+        const a = P(M, e.startPoint), b = P(M, e.endPoint);
+        emit({ type: "line", x1: a[0], y1: a[1], x2: b[0], y2: b[1] }, ly);
+        break;
+      }
+      case "CIRCLE": {
+        if (uni(M)) { const c = P(M, e.center); emit({ type: "circle", cx: c[0], cy: c[1], r: e.radius * mSc(M) }, ly); }
+        else emit({ type: "poly", pts: tessArcPts(e.center.x, e.center.y, e.radius, 0, Math.PI * 2).map(q => ap(M, q[0], q[1])), closed: true }, ly);
+        break;
+      }
+      case "ARC": { // 角度為弧度
+        if (uni(M)) {
+          const c = P(M, e.center), rot = mRot(M);
+          emit({ type: "arc", cx: c[0], cy: c[1], r: e.radius * mSc(M), a1: e.startAngle + rot, a2: e.endAngle + rot }, ly);
+        } else {
+          const sweep = norm2pi(e.endAngle - e.startAngle) || Math.PI * 2;
+          emit({ type: "poly", pts: tessArcPts(e.center.x, e.center.y, e.radius, e.startAngle, sweep).map(q => ap(M, q[0], q[1])), closed: false }, ly);
+        }
+        break;
+      }
+      case "LWPOLYLINE": case "POLYLINE": {
+        const vs = (e.vertices || []).map(v => [v.x, v.y, v.bulge || 0]);
+        if (vs.length >= 2) {
+          // LWPOLYLINE 用 DWG 原生 flag(512=closed);POLYLINE 用 DXF flag(1=closed)
+          const closed = e.type === "LWPOLYLINE" ? !!(e.flag & 512) : !!(e.flag & 1);
+          const src = closed ? [...vs, vs[0]] : vs;
+          const flat = bulgeChain(src).map(q => ap(M, q[0], q[1]));
+          if (closed) flat.pop();
+          if (flat.length >= 2) emit({ type: "poly", pts: flat, closed }, ly);
+        }
+        break;
+      }
+      case "TEXT": case "ATTRIB": case "ATTDEF": {
+        const s = (e.text || "").trim();
+        if (s && e.type !== "ATTDEF") {
+          const p = P(M, e.startPoint || e.insertionPoint);
+          emit({ type: "text", x: p[0], y: p[1], h: (e.textHeight || 3.5) * mSc(M), str: s }, ly);
+        }
+        break;
+      }
+      case "MTEXT": {
+        const s = mplain(e.text || "").trim();
+        if (s) {
+          const p = P(M, e.insertionPoint);
+          emit({ type: "text", x: p[0], y: p[1], h: (e.textHeight || 3.5) * mSc(M), str: s.slice(0, 200) }, ly);
+        }
+        break;
+      }
+      case "ELLIPSE": {
+        const mxa = e.majorAxisEndPoint || { x: 1, y: 0 };
+        const t1 = e.startAngle || 0, sweep = ((e.endAngle == null ? Math.PI * 2 : e.endAngle) - t1) || Math.PI * 2;
+        const n = 64, pts2 = [];
+        for (let i = 0; i <= n; i++) {
+          const t = t1 + sweep * i / n;
+          const x = e.center.x + Math.cos(t) * mxa.x - Math.sin(t) * e.axisRatio * mxa.y;
+          const y = e.center.y + Math.cos(t) * mxa.y + Math.sin(t) * e.axisRatio * mxa.x;
+          pts2.push(ap(M, x, y));
+        }
+        emit({ type: "poly", pts: pts2, closed: Math.abs(sweep - Math.PI * 2) < 1e-6 }, ly);
+        break;
+      }
+      case "SPLINE": {
+        const src = (e.fitPoints && e.fitPoints.length >= 2) ? e.fitPoints : (e.controlPoints || []);
+        const pts2 = src.map(p => ap(M, p.x, p.y));
+        if (pts2.length >= 2) emit({ type: "poly", pts: pts2, closed: !!(e.flag & 1) }, ly);
+        break;
+      }
+      case "SOLID": {
+        const cs = [e.corner1, e.corner2, e.corner4 || e.corner3, e.corner3].filter(Boolean);
+        if (cs.length >= 3) emit({ type: "poly", pts: cs.map(p => P(M, p)), closed: true }, ly);
+        break;
+      }
+      case "INSERT": case "DIMENSION": {
+        if (depth >= 8) { skipped++; break; }
+        const blk = blocks.get(e.name);
+        if (!blk) { skipped++; break; }
+        let Mi = M0;
+        if (e.type === "INSERT") {
+          const base = blk.basePoint || { x: 0, y: 0 };
+          const sx = e.xScale || 1, sy = e.yScale || 1, rot = e.rotation || 0; // 弧度
+          const co = Math.cos(rot), si = Math.sin(rot);
+          const RS = [co * sx, si * sx, -si * sy, co * sy];
+          Mi = [RS[0], RS[1], RS[2], RS[3],
+            e.insertionPoint.x - (RS[0] * base.x + RS[2] * base.y),
+            e.insertionPoint.y - (RS[1] * base.x + RS[3] * base.y)];
+        }
+        const Mt = mmul(M, Mi);
+        const cc = Math.max(1, e.columnCount || 1), rc = Math.max(1, e.rowCount || 1);
+        for (let ci = 0; ci < cc; ci++) for (let ri = 0; ri < rc; ri++) {
+          const Mo = (ci || ri) ? mmul(Mt, [1, 0, 0, 1, ci * (e.columnSpacing || 0), ri * (e.rowSpacing || 0)]) : Mt;
+          for (const ce of (blk.entities || [])) convEnt(ce, Mo, ly, depth + 1);
+        }
+        for (const at of (e.attribs || [])) convEnt(at, M, ly, depth + 1);
+        break;
+      }
+      default: skipped++;
+    }
+  }
+
+  const ms = blocks.get("*Model_Space");
+  const rootEnts = (ms && ms.entities && ms.entities.length ? ms.entities : db.entities) || [];
+  for (const e of rootEnts) convEnt(e, M0, null, 0);
+
+  // 圖層表(顏色可能是 24-bit 或 ACI 索引)
+  const layerRows = [];
+  for (const l of ((db.tables && db.tables.LAYER && db.tables.LAYER.entries) || [])) {
+    let col = "#e8e8e8";
+    if (l.color && l.color > 0 && l.color <= 0xffffff && l.color !== 16777215) col = "#" + l.color.toString(16).padStart(6, "0");
+    else if (l.colorIndex && l.colorIndex > 0 && l.colorIndex < 256) col = aciHex2(l.colorIndex);
+    layerRows.push({ name: l.name, color: col, visible: !l.off && !(l.standardFlag & 1), locked: false });
+  }
+  const layMap = new Map(layerRows.map(l => [l.name, l]));
+  for (const e of out) if (!layMap.has(e.layer)) {
+    const l = { name: e.layer, color: "#e8e8e8", visible: true, locked: false };
+    layMap.set(e.layer, l); layerRows.push(l);
+  }
+  if (!layerRows.length) layerRows.push({ name: "0", color: "#e8e8e8", visible: true, locked: false });
   if (out.length >= MAXE) toast(`圖太大,已達 ${MAXE} 圖元上限,後面的被截掉`, 7000);
   return {
     doc: { version: 1, units: "mm", layers: layerRows, entities: out, settings: { textH: 3.5, dimH: 3.5 } },
