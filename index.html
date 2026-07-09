@@ -51,6 +51,10 @@ button.primary:hover{background:#3182ce;}
 #side input[type=number]{width:70px; background:var(--panel2); border:1px solid var(--border); color:var(--fg); padding:3px 5px; border-radius:3px;}
 #side input[type=checkbox]{accent-color:var(--acc);}
 #selInfo{padding:4px 10px; color:var(--dim); font-size:12px; line-height:1.6;}
+#selInfo select{background:var(--panel2); border:1px solid var(--border); color:var(--fg); padding:2px 4px; border-radius:3px;}
+#selInfo .pfgrid{display:grid; grid-template-columns:1fr 1fr; gap:4px; margin-top:4px;}
+#selInfo .pf{display:flex; flex-direction:column; gap:2px; color:var(--dim);}
+#selInfo .pf input{background:var(--panel2); border:1px solid var(--border); color:var(--fg); padding:3px 4px; border-radius:3px; width:100%;}
 
 /* ── 狀態列 ── */
 #status{display:flex; gap:16px; padding:4px 10px; background:var(--panel); border-top:1px solid var(--border); color:var(--dim); font-size:12px;}
@@ -72,16 +76,6 @@ button.primary:hover{background:#3182ce;}
 #printOpts .chk{flex-direction:row; align-items:center;}
 #previewWrap{flex:1; background:#555; border-radius:4px; display:flex; align-items:center; justify-content:center; overflow:auto; padding:12px;}
 #previewWrap svg{background:#fff; box-shadow:0 2px 14px #0008;}
-
-/* ── 3D 檢視 ── */
-#threeModal{position:fixed; inset:0; background:#14161a; display:none; z-index:60;}
-#cv3{position:absolute; inset:0; width:100%; height:100%; touch-action:none; cursor:grab;}
-#threeCtrl{position:absolute; top:0; left:0; right:0; display:flex; align-items:center; gap:14px; flex-wrap:wrap;
-  padding:8px 12px; background:#1e2126dd; border-bottom:1px solid var(--border);}
-#threeCtrl label{display:flex; align-items:center; gap:6px; color:var(--dim);}
-#threeCtrl input{background:var(--panel2); border:1px solid var(--border); color:var(--fg); padding:4px 6px; border-radius:4px;}
-#threeCtrl .hint3d{color:var(--dim); font-size:12px;}
-#threeCtrl button:last-child{margin-left:auto;}
 
 /* ── 手機/窄螢幕 ── */
 @media (max-width: 820px){
@@ -127,7 +121,6 @@ button.primary:hover{background:#3182ce;}
     <button id="btnRedo">↪ 重做</button>
     <span class="sep"></span>
     <button id="btnZoomExt">縮放全圖</button>
-    <button id="btn3d">3D</button>
     <span class="sep"></span>
     <button id="btnPdf" class="primary">匯出 PDF</button>
     <button id="btnSvg" class="desktop-only">SVG</button>
@@ -146,11 +139,21 @@ button.primary:hover{background:#3182ce;}
       <button data-tool="arc">◠ 圓弧 A</button>
       <button data-tool="poly">⌒ 折線 P</button>
       <button data-tool="text">A 文字 T</button>
-      <button data-tool="dim">⟷ 標註 D</button>
+      <button data-tool="dim">⟷ 線性標註 D</button>
+      <button data-tool="dimrad">⌀ 半徑標註</button>
+      <button data-tool="dimang">∠ 角度標註</button>
       <button data-tool="measure">📏 量測 M</button>
       <div class="grp">編輯</div>
       <button id="btnDup">⧉ 複製</button>
       <button id="btnDel">✕ 刪除</button>
+      <button data-tool="rotate">⟳ 旋轉</button>
+      <button data-tool="mirror">◀▶ 鏡射</button>
+      <button data-tool="offset">⇉ 偏移</button>
+      <button data-tool="trim">✂ 修剪</button>
+      <button data-tool="extend">⇥ 延伸</button>
+      <button id="btnArray">▦ 陣列</button>
+      <div class="grp">圖庫</div>
+      <button id="btnLib">＋ 設備符號</button>
     </div>
     <div id="canvasWrap">
       <canvas id="cv"></canvas>
@@ -170,6 +173,9 @@ button.primary:hover{background:#3182ce;}
         <label><input type="checkbox" id="chkSnapGrid" checked> 格點鎖點</label>
         <label><input type="checkbox" id="chkOsnap" checked> 物件鎖點</label>
         <label><input type="checkbox" id="chkOrtho"> 正交 (Shift)</label>
+      </div>
+      <div id="offsetBox" class="box" style="display:none">
+        <label>偏移距離 <input type="number" id="inOffset" value="100" min="0" step="10"> mm</label>
       </div>
       <h3>文字/標註</h3>
       <div class="box">
@@ -232,17 +238,6 @@ button.primary:hover{background:#3182ce;}
       </div>
       <div id="previewWrap"></div>
     </div>
-  </div>
-</div>
-
-<div id="threeModal">
-  <canvas id="cv3"></canvas>
-  <div id="threeCtrl">
-    <span style="font-weight:bold;color:var(--acc)">3D 檢視</span>
-    <label>預設高度 <input type="number" id="in3dH" value="3000" min="0" step="100" style="width:70px"> mm</label>
-    <span class="hint3d">拖曳=旋轉;滾輪/雙指=縮放;Shift+拖或雙指移=平移</span>
-    <button id="btn3dPng">存成圖片</button>
-    <button id="btnClose3d">✕ 關閉</button>
   </div>
 </div>
 
@@ -392,7 +387,10 @@ function entPoints(e) { // 物件的特徵點(供鎖點/包圍盒)
       return p;
     }
     case "text": return [{ x: e.x, y: e.y, kind: "端點" }];
-    case "dim": return [{ x: e.x1, y: e.y1, kind: "端點" }, { x: e.x2, y: e.y2, kind: "端點" }];
+    case "dim":
+      if (e.dkind === "rad") return [{ x: e.cx, y: e.cy, kind: "圓心" }];
+      if (e.dkind === "ang") return [{ x: e.vx, y: e.vy, kind: "端點" }];
+      return [{ x: e.x1, y: e.y1, kind: "端點" }, { x: e.x2, y: e.y2, kind: "端點" }];
   }
   return [];
 }
@@ -440,6 +438,10 @@ function polySegs(e) { // rect/poly 拆成線段
   if (e.closed && e.pts.length > 2) segs.push([{ x: e.pts[e.pts.length - 1][0], y: e.pts[e.pts.length - 1][1] }, { x: e.pts[0][0], y: e.pts[0][1] }]);
   return segs;
 }
+function polySegsAny(e) { // line/rect/poly → 線段陣列(交點鎖點用)
+  if (e.type === "line") return [[{ x: e.x1, y: e.y1 }, { x: e.x2, y: e.y2 }]];
+  return polySegs(e);
+}
 function hitEntity(e, w, tol) {
   switch (e.type) {
     case "line": return distSeg(w, { x: e.x1, y: e.y1 }, { x: e.x2, y: e.y2 }) < tol;
@@ -475,16 +477,117 @@ function hitTest(w) {
 function translateEntity(e, dx, dy) {
   bbInvalidate(e);
   switch (e.type) {
-    case "line": case "dim": e.x1 += dx; e.y1 += dy; e.x2 += dx; e.y2 += dy; break;
+    case "dim":
+      if (e.dkind === "rad") { e.cx += dx; e.cy += dy; break; }
+      if (e.dkind === "ang") { e.vx += dx; e.vy += dy; e.ax += dx; e.ay += dy; e.bx += dx; e.by += dy; break; }
+      e.x1 += dx; e.y1 += dy; e.x2 += dx; e.y2 += dy; break;
+    case "line": e.x1 += dx; e.y1 += dy; e.x2 += dx; e.y2 += dy; break;
     case "rect": case "text": e.x += dx; e.y += dy; break;
     case "circle": case "arc": e.cx += dx; e.cy += dy; break;
     case "poly": for (const p of e.pts) { p[0] += dx; p[1] += dy; } break;
   }
 }
+// 通用點變換套用器:rect→轉成 poly(旋轉/鏡射後不再是軸對齊矩形)
+function mapEntityPoints(e, fn) {
+  bbInvalidate(e);
+  switch (e.type) {
+    case "line": case "dim": { const a = fn(e.x1, e.y1), b = fn(e.x2, e.y2); e.x1 = a[0]; e.y1 = a[1]; e.x2 = b[0]; e.y2 = b[1]; break; }
+    case "text": { const p = fn(e.x, e.y); e.x = p[0]; e.y = p[1]; break; }
+    case "poly": for (const p of e.pts) { const q = fn(p[0], p[1]); p[0] = q[0]; p[1] = q[1]; } break;
+    case "rect": { // 轉為 poly
+      const c = [[e.x, e.y], [e.x + e.w, e.y], [e.x + e.w, e.y + e.h], [e.x, e.y + e.h]].map(p => fn(p[0], p[1]));
+      delete e.w; delete e.h; delete e.x; delete e.y;
+      e.type = "poly"; e.pts = c; e.closed = true; break;
+    }
+    case "circle": case "arc": { const p = fn(e.cx, e.cy); e.cx = p[0]; e.cy = p[1]; break; }
+  }
+}
+function rotateEntity(e, cx, cy, ang) { // ang 弧度,繞 (cx,cy)
+  const co = Math.cos(ang), si = Math.sin(ang);
+  mapEntityPoints(e, (x, y) => { const dx = x - cx, dy = y - cy; return [cx + dx * co - dy * si, cy + dx * si + dy * co]; });
+  if (e.type === "arc") { e.a1 += ang; e.a2 += ang; }
+}
+function mirrorEntity(e, x1, y1, x2, y2) { // 對通過 (x1,y1)-(x2,y2) 的線鏡射
+  const dx = x2 - x1, dy = y2 - y1, L2 = dx * dx + dy * dy || 1;
+  const refl = (x, y) => {
+    const t = ((x - x1) * dx + (y - y1) * dy) / L2;
+    const px = x1 + t * dx, py = y1 + t * dy;
+    return [2 * px - x, 2 * py - y];
+  };
+  const ang = Math.atan2(dy, dx);
+  if (e.type === "arc") { // 鏡射會反轉弧方向:角度沿鏡射軸翻轉並對調起訖
+    const rf = a => 2 * ang - a;
+    const na1 = rf(e.a2), na2 = rf(e.a1);
+    mapEntityPoints(e, refl); e.a1 = na1; e.a2 = na2;
+  } else if (e.type === "poly" || e.type === "rect") {
+    mapEntityPoints(e, refl);
+    if (e.pts) e.pts.reverse();
+  } else mapEntityPoints(e, refl);
+}
+function offsetEntity(e, dist, side) { // side:{x,y} 決定偏移方向;回傳新物件或 null
+  const c = JSON.parse(JSON.stringify(e)); delete c.id;
+  if (e.type === "circle") { const nr = e.r + (side ? offsetSign(e.cx, e.cy, side, e.r) : 1) * dist; if (nr <= 0) return null; c.r = nr; return c; }
+  if (e.type === "arc") { const nr = e.r + (side ? offsetSign(e.cx, e.cy, side, e.r) : 1) * dist; if (nr <= 0) return null; c.r = nr; return c; }
+  // 線/折線/矩形:沿法線平移每個線段,再求相鄰交點
+  const src = e.type === "rect"
+    ? [[e.x, e.y], [e.x + e.w, e.y], [e.x + e.w, e.y + e.h], [e.x, e.y + e.h]]
+    : (e.type === "line" ? [[e.x1, e.y1], [e.x2, e.y2]] : e.pts.map(p => [p[0], p[1]]));
+  const closed = e.type === "rect" || (e.type === "poly" && e.closed);
+  const sgn = side ? offsetPolySign(src, closed, side) : 1;
+  const np = offsetPolyline(src, closed, dist * sgn);
+  if (!np || np.length < 2) return null;
+  if (e.type === "line") { c.type = "line"; c.x1 = np[0][0]; c.y1 = np[0][1]; c.x2 = np[1][0]; c.y2 = np[1][1]; delete c.pts; return c; }
+  c.type = "poly"; c.pts = np; c.closed = closed; delete c.x; delete c.y; delete c.w; delete c.h; return c;
+}
+function offsetSign(cx, cy, side, r) { return Math.hypot(side.x - cx, side.y - cy) > r ? 1 : -1; }
+function offsetPolySign(src, closed, side) { // 游標側決定 +/-:比較 side 到原線與到 +dist 線的距離
+  const test = offsetPolyline(src, closed, 1);
+  if (!test) return 1;
+  let d0 = Infinity, d1 = Infinity;
+  const segs = pairs(src, closed), segs1 = pairs(test, closed);
+  for (const s of segs) d0 = Math.min(d0, distSeg(side, { x: s[0][0], y: s[0][1] }, { x: s[1][0], y: s[1][1] }));
+  for (const s of segs1) d1 = Math.min(d1, distSeg(side, { x: s[0][0], y: s[0][1] }, { x: s[1][0], y: s[1][1] }));
+  return d1 < d0 ? 1 : -1;
+}
+function pairs(pts, closed) { const r = []; for (let i = 0; i < pts.length - 1; i++) r.push([pts[i], pts[i + 1]]); if (closed && pts.length > 2) r.push([pts[pts.length - 1], pts[0]]); return r; }
+function offsetPolyline(pts, closed, d) {
+  const segs = pairs(pts, closed).map(([a, b]) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1e-9;
+    const nx = -dy / L * d, ny = dx / L * d;
+    return [[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny]];
+  });
+  if (!segs.length) return null;
+  const out = [];
+  if (!closed) out.push(segs[0][0]);
+  for (let i = 0; i < segs.length - (closed ? 0 : 1); i++) {
+    const s1 = segs[i], s2 = segs[(i + 1) % segs.length];
+    const ip = lineIntersect(s1[0], s1[1], s2[0], s2[1]);
+    out.push(ip || s1[1]);
+  }
+  if (!closed) out.push(segs[segs.length - 1][1]);
+  return out;
+}
+function lineIntersect(p1, p2, p3, p4) { // 無限直線交點
+  const d = (p1[0] - p2[0]) * (p3[1] - p4[1]) - (p1[1] - p2[1]) * (p3[0] - p4[0]);
+  if (Math.abs(d) < 1e-9) return null;
+  const a = p1[0] * p2[1] - p1[1] * p2[0], b = p3[0] * p4[1] - p3[1] * p4[0];
+  return [(a * (p3[0] - p4[0]) - (p1[0] - p2[0]) * b) / d, (a * (p3[1] - p4[1]) - (p1[1] - p2[1]) * b) / d];
+}
+function intersectSegs(a, b, c, d) { // 線段交點(含界內判定),回傳 {x,y,t} 或 null
+  const r = { x: b.x - a.x, y: b.y - a.y }, s = { x: d.x - c.x, y: d.y - c.y };
+  const den = r.x * s.y - r.y * s.x;
+  if (Math.abs(den) < 1e-12) return null;
+  const t = ((c.x - a.x) * s.y - (c.y - a.y) * s.x) / den;
+  const u = ((c.x - a.x) * r.y - (c.y - a.y) * r.x) / den;
+  if (t < -1e-9 || t > 1 + 1e-9 || u < -1e-9 || u > 1 + 1e-9) return null;
+  return { x: a.x + t * r.x, y: a.y + t * r.y, t };
+}
 
 // ─── 標註幾何(Canvas / SVG / DXF 共用) ─────────────────
 function dimPrimitives(d, hOver) {
   const h = hOver || doc.settings.dimH || 3.5;
+  if (d.dkind === "rad") return dimRadial(d, h);
+  if (d.dkind === "ang") return dimAngular(d, h);
   const dx = d.x2 - d.x1, dy = d.y2 - d.y1, L = Math.hypot(dx, dy) || 1e-9;
   const ux = dx / L, uy = dy / L, nx = -uy, ny = ux;
   const o = d.off, so = o >= 0 ? 1 : -1;
@@ -508,6 +611,37 @@ function dimPrimitives(d, hOver) {
   const mid = { x: (A.x + B.x) / 2 + tnx * dist, y: (A.y + B.y) / 2 + tny * dist };
   return { lines, tris, text: { x: mid.x, y: mid.y, h, str: fmt(L), ang } };
 }
+function dimRadial(d, h) { // 半徑標註:圓心往外一條帶箭頭的線 + "R值"
+  const co = Math.cos(d.ang), si = Math.sin(d.ang);
+  const on = { x: d.cx + co * d.r, y: d.cy + si * d.r };       // 圓周上
+  const out = { x: d.cx + co * (d.r + h * 3), y: d.cy + si * (d.r + h * 3) };
+  const ah = h, ux = co, uy = si, nx = -si, ny = co;
+  const lines = [[{ x: d.cx, y: d.cy }, out]];
+  const tris = [[on, { x: on.x + ux * ah + nx * ah * .3, y: on.y + uy * ah + ny * ah * .3 },
+                     { x: on.x + ux * ah - nx * ah * .3, y: on.y + uy * ah - ny * ah * .3 }]];
+  let ang = Math.atan2(uy, ux);
+  if (ang > Math.PI / 2 + 1e-9 || ang <= -Math.PI / 2 + 1e-9) ang += Math.PI;
+  return { lines, tris, text: { x: out.x, y: out.y + h * 0.6, h, str: "R" + fmt(d.r), ang: 0 } };
+}
+function dimAngular(d, h) { // 角度標註:兩邊 + 圓弧 + 角度值
+  const a1 = Math.atan2(d.ay - d.vy, d.ax - d.vx);
+  const a2 = Math.atan2(d.by - d.vy, d.bx - d.vx);
+  let sweep = a2 - a1; while (sweep <= -Math.PI) sweep += 2 * Math.PI; while (sweep > Math.PI) sweep -= 2 * Math.PI;
+  const R = Math.min(Math.hypot(d.ax - d.vx, d.ay - d.vy), Math.hypot(d.bx - d.vx, d.by - d.vy)) * 0.6 || h * 5;
+  const lines = [];
+  const n = Math.max(4, Math.ceil(Math.abs(sweep) / 0.2));
+  let prev = null;
+  for (let i = 0; i <= n; i++) {
+    const t = a1 + sweep * i / n;
+    const p = { x: d.vx + Math.cos(t) * R, y: d.vy + Math.sin(t) * R };
+    if (prev) lines.push([prev, p]); prev = p;
+  }
+  lines.push([{ x: d.vx, y: d.vy }, { x: d.vx + Math.cos(a1) * R * 1.1, y: d.vy + Math.sin(a1) * R * 1.1 }]);
+  lines.push([{ x: d.vx, y: d.vy }, { x: d.vx + Math.cos(a2) * R * 1.1, y: d.vy + Math.sin(a2) * R * 1.1 }]);
+  const tm = a1 + sweep / 2;
+  const deg = Math.abs(sweep) * 180 / Math.PI;
+  return { lines, tris: [], text: { x: d.vx + Math.cos(tm) * (R + h), y: d.vy + Math.sin(tm) * (R + h), h, str: fmt(deg) + "°", ang: 0 } };
+}
 
 // ─── 鎖點 ───────────────────────────────────────────────
 function getSnap(mx, my, tolOver) {
@@ -515,12 +649,24 @@ function getSnap(mx, my, tolOver) {
   if ($("chkOsnap").checked) {
     const tol = tolOver || 10; let best = null, bd = tol;
     const w = s2w(mx, my), tw = tol / view.scale; // 世界座標粗篩範圍
-    for (const e of nearEntities(w, tw)) {
+    const near = nearEntities(w, tw);
+    for (const e of near) {
       const b = bboxCached(e); // 粗篩:游標不在包圍盒附近就跳過(大圖效能關鍵)
       if (w.x < b.minx - tw || w.x > b.maxx + tw || w.y < b.miny - tw || w.y > b.maxy + tw) continue;
       for (const sp of entPoints(e)) {
         const s = w2s(sp), d = Math.hypot(s.x - mx, s.y - my);
         if (d < bd) { bd = d; best = sp; }
+      }
+    }
+    // 交點鎖點:附近兩物件的線段交點(優先度略低於特徵點,故用稍大容差比對)
+    if (!best) {
+      const segList = [];
+      for (const e of near) if (["line", "rect", "poly"].includes(e.type)) for (const s of polySegsAny(e)) segList.push(s);
+      for (let i = 0; i < segList.length; i++) for (let j = i + 1; j < segList.length; j++) {
+        const ip = intersectSegs(segList[i][0], segList[i][1], segList[j][0], segList[j][1]);
+        if (!ip) continue;
+        const s = w2s(ip), d = Math.hypot(s.x - mx, s.y - my);
+        if (d < bd) { bd = d; best = { x: ip.x, y: ip.y, kind: "交點" }; }
       }
     }
     if (best) { snapMark = best; return { x: best.x, y: best.y }; }
@@ -655,6 +801,7 @@ function redraw(sceneChanged) {
   }
   ctx.restore();
   drawPreview();
+  drawEditState();
   drawSnapMark();
   if (marquee) {
     const m = marquee, L = Math.min(m.x1, m.x2), T = Math.min(m.y1, m.y2), W = Math.abs(m.x2 - m.x1), H = Math.abs(m.y2 - m.y1);
@@ -686,6 +833,15 @@ function previewEntity(p) {
     case "dim":
       if (pts.length === 1) return { type: "line", x1: a.x, y1: a.y, x2: p.x, y2: p.y };
       return { type: "dim", x1: a.x, y1: a.y, x2: pts[1].x, y2: pts[1].y, off: dimOffsetFrom(p) };
+    case "dimang":
+      if (pts.length === 1) return { type: "line", x1: a.x, y1: a.y, x2: p.x, y2: p.y };
+      return { type: "line", x1: a.x, y1: a.y, x2: p.x, y2: p.y };
+    case "rotate":
+      if (pts.length === 1) return { type: "line", x1: a.x, y1: a.y, x2: p.x, y2: p.y };
+      return null;
+    case "mirror":
+      if (pts.length === 1) return { type: "line", x1: a.x, y1: a.y, x2: p.x, y2: p.y };
+      return null;
   }
   return null;
 }
@@ -693,6 +849,23 @@ function dimOffsetFrom(p) {
   const a = pts[0], b = pts[1];
   const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1e-9;
   return ((p.x - a.x) * (-dy / L) + (p.y - a.y) * (dx / L));
+}
+function drawEditState() {
+  if (!editState) return;
+  ctx.save();
+  ctx.lineWidth = 2.5; ctx.setLineDash([]);
+  if (editState.bounds) { // 修剪/延伸邊界:綠色高亮
+    ctx.strokeStyle = "#7fdc7f";
+    for (const e of editState.bounds) strokeEntity(ctx, e, view);
+  }
+  if (editState.src) { // 偏移來源:黃色高亮 + 預覽
+    ctx.strokeStyle = "#ffd75e";
+    strokeEntity(ctx, editState.src, view);
+    const dist = Math.abs(parseFloat($("inOffset").value)) || 100;
+    const nc = offsetEntity(editState.src, dist, cursorW);
+    if (nc) { ctx.strokeStyle = "#9ad1ff"; ctx.setLineDash([4, 4]); strokeEntity(ctx, nc, view); }
+  }
+  ctx.restore();
 }
 function drawSnapMark() {
   if (!snapMark) return;
@@ -712,17 +885,30 @@ const HINTS = {
   arc: "圓弧:點圓心 → 起點 → 終點方向(逆時針)",
   poly: "折線:連續點,右鍵結束;點回起點可封閉",
   text: "文字:點放置位置後輸入內容,Enter 確定",
-  dim: "標註:點兩個端點,再點標註線位置",
+  dim: "線性標註:點兩個端點,再點標註線位置",
+  dimrad: "半徑標註:點一個圓或圓弧",
+  dimang: "角度標註:點頂點 → 第一邊 → 第二邊",
   measure: "量測:點兩點顯示距離",
+  rotate: "旋轉:先選取物件(未選則點取)→ 點旋轉中心 → 點角度(或輸入度數)",
+  mirror: "鏡射:先選取物件 → 點鏡射線第一點 → 第二點(原件保留)",
+  offset: "偏移:先輸入距離(右側面板),點一條線/圓 → 點要偏移的那一側",
+  trim: "修剪:點要保留的邊界線(可多條,右鍵完成)→ 逐一點掉要剪掉的線段",
+  extend: "延伸:點邊界線(右鍵完成)→ 點要延伸的線靠近的那端",
 };
+const NEEDS_SEL = { rotate: 1, mirror: 1 };
 function setTool(t) {
   tool = t; pts = []; hideFloat();
+  editState = null;
   document.querySelectorAll("#toolbox [data-tool]").forEach(b => b.classList.toggle("active", b.dataset.tool === t));
   $("hint").textContent = HINTS[t] || "";
-  if (t !== "select") { selection.clear(); updateSelInfo(); }
+  // 旋轉/鏡射需要先有選取;沒有就切回選取模式提示
+  if (NEEDS_SEL[t] && !selection.size) toast("請先框選或點選要「" + (t === "rotate" ? "旋轉" : "鏡射") + "」的物件");
+  if (t !== "select" && !NEEDS_SEL[t] && t !== "trim" && t !== "extend") { selection.clear(); updateSelInfo(); }
+  $("offsetBox").style.display = t === "offset" ? "block" : "none";
   redraw(true);
   updateTouchBar();
 }
+let editState = null; // 多步編輯工具的中間狀態
 function addEntity(e) {
   snapshot();
   e.id = uid(); e.layer = currentLayer;
@@ -737,9 +923,16 @@ function finishPoly(closed) {
   pts = []; redraw();
 }
 function cancelTool() {
+  // 修剪/延伸:右鍵在「選邊界」階段 = 完成邊界進入目標階段
+  if ((tool === "trim" || tool === "extend") && editState && editState.phase === "bound") {
+    if (editState.bounds.length) { editState.phase = "target"; toast("邊界已定,現在點要" + (tool === "trim" ? "剪掉的線段" : "延伸的線") + "(Esc 換邊界)"); redraw(); return; }
+    setTool("select"); return;
+  }
+  if ((tool === "trim" || tool === "extend") && editState) { editState = null; toast("重新選邊界"); redraw(); return; }
   if (tool === "poly" && pts.length >= 2) { finishPoly(false); updateTouchBar(); return; }
   if (tool === "line" && pts.length) { pts = []; redraw(); updateTouchBar(); return; }
   if (pts.length) { pts = []; redraw(); updateTouchBar(); return; }
+  if (editState) { editState = null; redraw(); return; }
   setTool("select");
 }
 
@@ -832,9 +1025,132 @@ function drawingClick(w) {
         pts = [];
       }
       break;
+    case "dimrad": {
+      const hit = hitTest(w);
+      if (hit && (hit.type === "circle" || hit.type === "arc")) {
+        addEntity({ type: "dim", dkind: "rad", cx: hit.cx, cy: hit.cy, r: hit.r,
+          ang: Math.atan2(w.y - hit.cy, w.x - hit.cx) });
+      } else toast("請點在圓或圓弧上");
+      break;
+    }
+    case "dimang":
+      pts.push(w);
+      if (pts.length === 3) {
+        addEntity({ type: "dim", dkind: "ang", vx: pts[0].x, vy: pts[0].y,
+          ax: pts[1].x, ay: pts[1].y, bx: pts[2].x, by: pts[2].y });
+        pts = [];
+      }
+      break;
+    case "rotate":
+      if (!selection.size) { const h = hitTest(w); if (h) { selection.add(h.id); updateSelInfo(); } break; }
+      pts.push(w);
+      if (pts.length === 2) {
+        const c = pts[0];
+        const ang = Math.atan2(w.y - c.y, w.x - c.x) - (editState ? editState.base : 0);
+        applyRotate(c, ang);
+        pts = [];
+      } else editState = { base: 0, center: w }; // 第一點=中心
+      break;
+    case "mirror":
+      if (!selection.size) { const h = hitTest(w); if (h) { selection.add(h.id); updateSelInfo(); } break; }
+      pts.push(w);
+      if (pts.length === 2) { applyMirror(pts[0], w); pts = []; }
+      break;
+    case "offset": {
+      if (!editState) {
+        const hit = hitTest(w);
+        if (hit && ["line", "poly", "rect", "circle", "arc"].includes(hit.type)) editState = { src: hit };
+        else toast("請點一條線/折線/矩形/圓");
+      } else {
+        const dist = Math.abs(parseFloat($("inOffset").value)) || 100;
+        const nc = offsetEntity(editState.src, dist, w);
+        if (nc) { addEntity(nc); toast(`已偏移 ${dist} mm`); }
+        else toast("此物件無法以該距離偏移");
+        editState = null; // 連續偏移:保持工具,重點新線
+      }
+      break;
+    }
+    case "trim": case "extend": {
+      if (!editState) editState = { bounds: [], phase: "bound" };
+      if (editState.phase === "bound") {
+        const hit = hitTest(w);
+        if (hit) { if (!editState.bounds.includes(hit)) editState.bounds.push(hit); toast(`邊界 ${editState.bounds.length} 條,右鍵完成後點目標`); }
+      } else {
+        const hit = hitTest(w);
+        if (hit && hit.type === "line") {
+          if (tool === "trim") doTrim(hit, w);
+          else doExtend(hit, w);
+        }
+      }
+      break;
+    }
   }
   redraw();
   updateTouchBar();
+}
+function applyRotate(c, ang) {
+  if (!ang) return;
+  snapshot();
+  for (const e of doc.entities) if (selection.has(e.id)) rotateEntity(e, c.x, c.y, ang);
+  bumpRev(); redraw(true); autosave();
+  toast(`已旋轉 ${fmt(ang * 180 / Math.PI)}°`);
+}
+function applyMirror(p1, p2) {
+  snapshot();
+  for (const e of doc.entities) if (selection.has(e.id)) mirrorEntity(e, p1.x, p1.y, p2.x, p2.y);
+  bumpRev(); redraw(true); autosave();
+  toast("已鏡射");
+}
+function segOf(e) { return [{ x: e.x1, y: e.y1 }, { x: e.x2, y: e.y2 }]; }
+function boundSegsFor(e) { // 邊界物件轉成線段集合
+  if (e.type === "line") return [segOf(e)];
+  return polySegs(e).map(s => [{ x: s[0].x, y: s[0].y }, { x: s[1].x, y: s[1].y }]);
+}
+function doTrim(ln, w) {
+  // 找 ln 與所有邊界的交點,依游標最近的區段剪掉
+  const a = { x: ln.x1, y: ln.y1 }, b = { x: ln.x2, y: ln.y2 };
+  const ts = [0, 1];
+  for (const be of editState.bounds) if (be !== ln) for (const bs of boundSegsFor(be)) {
+    const ip = intersectSegs(a, b, bs[0], bs[1]); if (ip) ts.push(ip.t);
+  }
+  ts.sort((x, y) => x - y);
+  const wt = ((w.x - a.x) * (b.x - a.x) + (w.y - a.y) * (b.y - a.y)) / (((b.x - a.x) ** 2 + (b.y - a.y) ** 2) || 1);
+  let lo = 0, hi = 1;
+  for (let i = 0; i < ts.length - 1; i++) if (wt >= ts[i] - 1e-6 && wt <= ts[i + 1] + 1e-6) { lo = ts[i]; hi = ts[i + 1]; break; }
+  if (hi - lo < 1e-6) return;
+  snapshot();
+  const P = t => ({ x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) });
+  if (lo <= 1e-6 && hi >= 1 - 1e-6) { doc.entities = doc.entities.filter(e => e !== ln); }
+  else if (lo <= 1e-6) { const p = P(hi); ln.x1 = p.x; ln.y1 = p.y; bbInvalidate(ln); }
+  else if (hi >= 1 - 1e-6) { const p = P(lo); ln.x2 = p.x; ln.y2 = p.y; bbInvalidate(ln); }
+  else { // 中間段被剪 → 一分為二
+    const p1 = P(lo), p2 = P(hi);
+    const c2 = JSON.parse(JSON.stringify(ln)); c2.id = uid(); c2.x1 = p2.x; c2.y1 = p2.y;
+    ln.x2 = p1.x; ln.y2 = p1.y; bbInvalidate(ln);
+    doc.entities.push(c2);
+  }
+  bumpRev(); redraw(true); autosave();
+}
+function doExtend(ln, w) {
+  const a = { x: ln.x1, y: ln.y1 }, b = { x: ln.x2, y: ln.y2 };
+  const nearA = Math.hypot(w.x - a.x, w.y - a.y) < Math.hypot(w.x - b.x, w.y - b.y);
+  const from = nearA ? b : a, moving = nearA ? a : b; // 從固定端往移動端方向延伸
+  const dx = moving.x - from.x, dy = moving.y - from.y, L = Math.hypot(dx, dy) || 1;
+  const ux = dx / L, uy = dy / L;
+  let best = null;
+  for (const be of editState.bounds) if (be !== ln) for (const bs of boundSegsFor(be)) {
+    const ip = lineIntersect([from.x, from.y], [moving.x, moving.y], [bs[0].x, bs[0].y], [bs[1].x, bs[1].y]);
+    if (!ip) continue;
+    const t = (ip[0] - from.x) * ux + (ip[1] - from.y) * uy; // 沿延伸方向的距離
+    // 交點須在邊界線段內、且在移動端之外(延長)
+    const onSeg = Math.min(bs[0].x, bs[1].x) - 1e-6 <= ip[0] && ip[0] <= Math.max(bs[0].x, bs[1].x) + 1e-6 &&
+                  Math.min(bs[0].y, bs[1].y) - 1e-6 <= ip[1] && ip[1] <= Math.max(bs[0].y, bs[1].y) + 1e-6;
+    if (onSeg && t > L - 1e-6 && (!best || t < best.t)) best = { t, x: ip[0], y: ip[1] };
+  }
+  if (!best) { toast("找不到可延伸到的邊界"); return; }
+  snapshot();
+  if (nearA) { ln.x1 = best.x; ln.y1 = best.y; } else { ln.x2 = best.x; ln.y2 = best.y; }
+  bbInvalidate(ln); bumpRev(); redraw(true); autosave();
 }
 cv.addEventListener("mousemove", e => {
   const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
@@ -1140,35 +1456,62 @@ function duplicateSel() {
   selection = new Set(copies.map(c => c.id));
   bumpRev(); updateSelInfo(); redraw(true); autosave();
 }
+const ENAME = { line: "線段", rect: "矩形", circle: "圓", arc: "圓弧", poly: "折線", text: "文字", dim: "標註" };
+function numField(label, id, val) {
+  return `<label class="pf">${label}<input type="number" id="${id}" value="${fmt(val)}" step="any"></label>`;
+}
 function updateSelInfo() {
   const n = selection.size;
-  if (!n) { $("selInfo").textContent = "未選取"; return; }
+  const box = $("selInfo");
+  if (!n) { box.textContent = "未選取"; return; }
   const sel = doc.entities.filter(e => selection.has(e.id));
   let html = `已選取 ${n} 個物件`;
+  // 圖層下拉(套用到全部選取)
+  html += `<div style="margin-top:6px">圖層 <select id="selLayer">` +
+    doc.layers.map(l => `<option${sel.every(e => e.layer === l.name) ? " selected" : ""}>${l.name}</option>`).join("") +
+    `</select></div>`;
+  // 單一物件:數值屬性編輯
   if (n === 1) {
     const e = sel[0];
-    const names = { line: "線段", rect: "矩形", circle: "圓", arc: "圓弧", poly: "折線", text: "文字", dim: "標註" };
-    html += `<br>${names[e.type]}(圖層 ${e.layer})`;
-    if (e.type === "line") html += `<br>長度 ${fmt(Math.hypot(e.x2 - e.x1, e.y2 - e.y1))} mm`;
-    if (e.type === "rect") html += `<br>${fmt(e.w)} × ${fmt(e.h)} mm`;
-    if (e.type === "circle") html += `<br>半徑 ${fmt(e.r)} mm`;
-    if (e.type === "text") html += `<br>「${e.str}」`;
-  }
-  // 3D 高度(套用到所有選取的幾何物件)
-  const cur = sel.find(e => e.h3d != null);
-  html += `<br><label style="display:flex;align-items:center;gap:4px;margin-top:4px">3D高度
-    <input type="number" id="inSelH3d" min="0" step="100" style="width:64px" value="${cur ? cur.h3d : ""}"
-      placeholder="預設"> mm <button id="btnSelH3d" style="padding:2px 8px">套用</button></label>`;
-  $("selInfo").innerHTML = html;
-  $("btnSelH3d").onclick = () => {
-    const v = $("inSelH3d").value.trim();
-    snapshot();
-    for (const e of doc.entities) if (selection.has(e.id)) {
-      if (v === "") delete e.h3d; else e.h3d = parseFloat(v) || 0;
+    html += `<div style="margin-top:4px;color:var(--fg)">${ENAME[e.type]}</div><div class="pfgrid">`;
+    if (e.type === "line") {
+      html += numField("長度", "pfLen", Math.hypot(e.x2 - e.x1, e.y2 - e.y1)) +
+        numField("角度°", "pfAng", Math.atan2(e.y2 - e.y1, e.x2 - e.x1) * 180 / Math.PI);
+    } else if (e.type === "rect") {
+      html += numField("寬", "pfW", e.w) + numField("高", "pfH", e.h);
+    } else if (e.type === "circle") {
+      html += numField("半徑", "pfR", e.r) + numField("直徑", "pfD", e.r * 2);
+    } else if (e.type === "arc") {
+      html += numField("半徑", "pfR", e.r);
+    } else if (e.type === "text") {
+      html += numField("字高", "pfTH", e.h);
     }
-    autosave();
-    toast(v === "" ? "已恢復用預設高度" : `已設定 3D 高度 ${v} mm(按「3D」檢視)`);
+    html += `</div>`;
+    if (e.type === "text") html += `<div style="color:var(--dim);margin-top:2px">「${e.str}」(畫布雙擊可改字)</div>`;
+  }
+  box.innerHTML = html;
+  $("selLayer").onchange = () => {
+    snapshot();
+    const ln = $("selLayer").value;
+    for (const e of doc.entities) if (selection.has(e.id)) e.layer = ln;
+    bumpRev(); redraw(true); autosave();
   };
+  const one = n === 1 ? sel[0] : null;
+  const bind = (id, fn) => { const el = $(id); if (el) el.onchange = () => { const v = parseFloat(el.value); if (isNaN(v)) return; snapshot(); fn(v); bbInvalidate(one); bumpRev(); redraw(true); autosave(); updateSelInfo(); }; };
+  if (one) {
+    if (one.type === "line") {
+      bind("pfLen", v => { if (v <= 0) return; const a = Math.atan2(one.y2 - one.y1, one.x2 - one.x1); one.x2 = one.x1 + Math.cos(a) * v; one.y2 = one.y1 + Math.sin(a) * v; });
+      bind("pfAng", v => { const L = Math.hypot(one.x2 - one.x1, one.y2 - one.y1), a = v * Math.PI / 180; one.x2 = one.x1 + Math.cos(a) * L; one.y2 = one.y1 + Math.sin(a) * L; });
+    } else if (one.type === "rect") {
+      bind("pfW", v => one.w = v); bind("pfH", v => one.h = v);
+    } else if (one.type === "circle") {
+      bind("pfR", v => { if (v > 0) one.r = v; }); bind("pfD", v => { if (v > 0) one.r = v / 2; });
+    } else if (one.type === "arc") {
+      bind("pfR", v => { if (v > 0) one.r = v; });
+    } else if (one.type === "text") {
+      bind("pfTH", v => { if (v > 0) one.h = v; });
+    }
+  }
 }
 
 // ─── 圖層 ───────────────────────────────────────────────
@@ -2249,6 +2592,72 @@ $("btnDel").onclick = deleteSel;
 $("btnDup").onclick = duplicateSel;
 document.querySelectorAll("#toolbox [data-tool]").forEach(b => b.onclick = () => setTool(b.dataset.tool));
 
+// 陣列:選取後等距複製成矩陣
+$("btnArray").onclick = () => {
+  if (!selection.size) { toast("請先選取要陣列的物件"); return; }
+  const cols = parseInt(prompt("橫向數量(含原件):", "3") || "0");
+  if (cols < 1) return;
+  const rows = parseInt(prompt("縱向數量(含原件):", "1") || "0");
+  if (rows < 1) return;
+  const dxv = parseFloat(prompt("橫向間距 mm(往右為正):", "1000") || "0");
+  const dyv = parseFloat(prompt("縱向間距 mm(往上為正):", "0") || "0");
+  snapshot();
+  const base = doc.entities.filter(e => selection.has(e.id));
+  const newIds = [];
+  for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) {
+    if (c === 0 && r === 0) continue;
+    for (const e of base) {
+      const cp = JSON.parse(JSON.stringify(e)); cp.id = uid();
+      translateEntity(cp, dxv * c, dyv * r);
+      doc.entities.push(cp); newIds.push(cp.id);
+    }
+  }
+  selection = new Set([...selection, ...newIds]);
+  bumpRev(); updateSelInfo(); redraw(true); autosave();
+  toast(`已建立 ${cols}×${rows} 陣列`);
+};
+
+// 設備符號圖庫:點一下插入到畫面中央,可再拖曳/旋轉
+const SYMBOLS = {
+  "單開門": () => { const w = 900; return [
+    { type: "line", x1: 0, y1: 0, x2: 0, y2: w },
+    { type: "arc", cx: 0, cy: 0, r: w, a1: 0, a2: Math.PI / 2 },
+    { type: "line", x1: 0, y1: 0, x2: w, y2: 0 }]; },
+  "雙開門": () => { const w = 750; return [
+    { type: "line", x1: 0, y1: 0, x2: 0, y2: w }, { type: "arc", cx: 0, cy: 0, r: w, a1: 0, a2: Math.PI / 2 },
+    { type: "line", x1: 1500, y1: 0, x2: 1500, y2: w }, { type: "arc", cx: 1500, cy: 0, r: w, a1: Math.PI / 2, a2: Math.PI }]; },
+  "窗": () => [
+    { type: "rect", x: 0, y: 0, w: 1500, h: 200 },
+    { type: "line", x1: 0, y1: 100, x2: 1500, y2: 100 }],
+  "配電盤": () => [
+    { type: "rect", x: 0, y: 0, w: 800, h: 400 },
+    { type: "line", x1: 0, y1: 0, x2: 800, y2: 400 }, { type: "text", x: 250, y: 170, h: 100, str: "盤" }],
+  "電池櫃": () => [
+    { type: "rect", x: 0, y: 0, w: 600, h: 800 },
+    { type: "line", x1: 0, y1: 267, x2: 600, y2: 267 }, { type: "line", x1: 0, y1: 533, x2: 600, y2: 533 }],
+  "桌": () => [{ type: "rect", x: 0, y: 0, w: 1400, h: 700 }],
+  "馬桶": () => [
+    { type: "rect", x: 0, y: 0, w: 380, h: 200 },
+    { type: "arc", cx: 190, cy: 200, r: 190, a1: 0, a2: Math.PI }],
+  "圓桌": () => [{ type: "circle", cx: 0, cy: 0, r: 600 }],
+};
+$("btnLib").onclick = () => {
+  const names = Object.keys(SYMBOLS);
+  const pick = prompt("插入設備符號(輸入編號):\n" + names.map((n, i) => `${i + 1}. ${n}`).join("\n"), "1");
+  const idx = parseInt(pick) - 1;
+  if (isNaN(idx) || idx < 0 || idx >= names.length) return;
+  const parts = SYMBOLS[names[idx]]();
+  // 放到目前畫面中央
+  const c = s2w(cv._w / 2, cv._h / 2);
+  snapshot();
+  const ids = [];
+  for (const e of parts) { translateEntity(e, c.x, c.y); e.id = uid(); e.layer = currentLayer; doc.entities.push(e); ids.push(e.id); }
+  selection = new Set(ids);
+  setTool("select");
+  bumpRev(); updateSelInfo(); redraw(true); autosave();
+  toast(`已插入「${names[idx]}」— 可拖曳移動或用旋轉工具調整`);
+};
+
 // 設定
 function syncSettingsUI() {
   $("inTextH").value = doc.settings.textH;
@@ -2266,172 +2675,6 @@ $("btnAutoH").onclick = () => {
 };
 ["chkGrid", "chkSnapGrid", "chkOsnap", "chkOrtho"].forEach(id => $(id).onchange = () => redraw(true));
 
-// ─── 3D 檢視(2.5D 擠出線框,軸測投影,零相依) ─────────
-const cv3 = $("cv3"), ctx3 = cv3.getContext("2d");
-const T3 = { th: -0.6, ph: 1.0, s: 1, panX: 0, panY: 0, cx: 0, cy: 0, open: false };
-const MAX_3D_ENTS = 60000;
-function h3dOf(e) { // 物件的擠出高度:自訂優先,否則預設;文字/標註永遠平面
-  if (e.type === "text" || e.type === "dim") return 0;
-  return e.h3d != null ? e.h3d : (parseFloat($("in3dH").value) || 0);
-}
-function open3d() {
-  if (!visibleEntities().length) { toast("圖是空的,先畫一些東西"); return; }
-  $("threeModal").style.display = "block";
-  T3.open = true;
-  const r = cv3.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  cv3.width = r.width * dpr; cv3.height = r.height * dpr;
-  ctx3.setTransform(dpr, 0, 0, dpr, 0, 0);
-  cv3._w = r.width; cv3._h = r.height;
-  const b = extents();
-  T3.cx = (b.minx + b.maxx) / 2; T3.cy = (b.miny + b.maxy) / 2;
-  const dim = Math.max(b.maxx - b.minx, b.maxy - b.miny) || 100;
-  T3.s = Math.min(cv3._w, cv3._h) * 0.62 / dim;
-  T3.th = -0.6; T3.ph = 1.0; T3.panX = 0; T3.panY = 40;
-  render3d();
-}
-function close3d() { $("threeModal").style.display = "none"; T3.open = false; }
-function proj3(x, y, z) {
-  const c = Math.cos(T3.th), s = Math.sin(T3.th);
-  const xr = (x - T3.cx) * c - (y - T3.cy) * s;
-  const yr = (x - T3.cx) * s + (y - T3.cy) * c;
-  return [cv3._w / 2 + T3.panX + xr * T3.s,
-          cv3._h / 2 + T3.panY - (yr * Math.cos(T3.ph) + z * Math.sin(T3.ph)) * T3.s];
-}
-function render3d() { render3dTo(ctx3, cv3._w, cv3._h); }
-function render3dTo(c3, W3, H3) {
-  const oldW = cv3._w, oldH = cv3._h;
-  cv3._w = W3; cv3._h = H3; // proj3 以 cv3._w/_h 為中心
-  try { render3dBody(c3); } finally { cv3._w = oldW; cv3._h = oldH; }
-}
-function render3dBody(ctx3) {
-  ctx3.clearRect(0, 0, cv3._w, cv3._h);
-  ctx3.fillStyle = "#14161a"; ctx3.fillRect(0, 0, cv3._w, cv3._h);
-  const b = extents();
-  if (!b) return;
-  // 地面框
-  ctx3.strokeStyle = "#333a44"; ctx3.lineWidth = 1;
-  const g = [[b.minx, b.miny], [b.maxx, b.miny], [b.maxx, b.maxy], [b.minx, b.maxy]];
-  ctx3.beginPath();
-  g.forEach((p, i) => { const q = proj3(p[0], p[1], 0); i ? ctx3.lineTo(q[0], q[1]) : ctx3.moveTo(q[0], q[1]); });
-  ctx3.closePath(); ctx3.stroke();
-  const list = visibleEntities();
-  const n = Math.min(list.length, MAX_3D_ENTS);
-  ctx3.lineWidth = 1.1;
-  const seg3 = (x1, y1, x2, y2, z1, z2) => {
-    const a = proj3(x1, y1, z1), c2 = proj3(x2, y2, z2);
-    ctx3.moveTo(a[0], a[1]); ctx3.lineTo(c2[0], c2[1]);
-  };
-  const prism = (pts, closed, h) => { // 底邊+頂邊+立柱
-    const m = pts.length;
-    for (let i = 0; i < m - (closed ? 0 : 1); i++) {
-      const a = pts[i], c2 = pts[(i + 1) % m];
-      seg3(a[0], a[1], c2[0], c2[1], 0, 0);
-      if (h > 0) seg3(a[0], a[1], c2[0], c2[1], h, h);
-    }
-    if (h > 0) {
-      const step = Math.max(1, Math.floor(m / 8)); // 密集折線只畫部分立柱
-      for (let i = 0; i < m; i += step) seg3(pts[i][0], pts[i][1], pts[i][0], pts[i][1], 0, h);
-    }
-  };
-  for (let i = 0; i < n; i++) {
-    const e = list[i];
-    const col = layerOf(e).color;
-    ctx3.strokeStyle = col; ctx3.fillStyle = col;
-    const h = h3dOf(e);
-    ctx3.beginPath();
-    switch (e.type) {
-      case "line":
-        seg3(e.x1, e.y1, e.x2, e.y2, 0, 0);
-        if (h > 0) {
-          seg3(e.x1, e.y1, e.x2, e.y2, h, h);
-          seg3(e.x1, e.y1, e.x1, e.y1, 0, h);
-          seg3(e.x2, e.y2, e.x2, e.y2, 0, h);
-        }
-        break;
-      case "rect":
-        prism([[e.x, e.y], [e.x + e.w, e.y], [e.x + e.w, e.y + e.h], [e.x, e.y + e.h]], true, h);
-        break;
-      case "poly": prism(e.pts, e.closed, h); break;
-      case "circle": prism(tessArcPts(e.cx, e.cy, e.r, 0, Math.PI * 2).slice(0, -1), true, h); break;
-      case "arc": prism(tessArcPts(e.cx, e.cy, e.r, e.a1, norm2pi(e.a2 - e.a1) || Math.PI * 2), false, h); break;
-      case "text": {
-        const p = proj3(e.x, e.y, 0);
-        ctx3.font = Math.max(9, e.h * T3.s) + "px 'Microsoft JhengHei',sans-serif";
-        ctx3.fillText(e.str, p[0], p[1]);
-        break;
-      }
-      case "dim": {
-        const gm = dimPrimitives(e);
-        for (const s2 of gm.lines) seg3(s2[0].x, s2[0].y, s2[1].x, s2[1].y, 0, 0);
-        const p = proj3(gm.text.x, gm.text.y, 0);
-        ctx3.font = Math.max(9, gm.text.h * T3.s) + "px 'Microsoft JhengHei',sans-serif";
-        ctx3.fillText(gm.text.str, p[0], p[1]);
-        break;
-      }
-    }
-    ctx3.stroke();
-  }
-  if (list.length > n) {
-    ctx3.fillStyle = "#e06060"; ctx3.font = "13px sans-serif";
-    ctx3.fillText(`圖太大,只顯示前 ${n} 個圖元`, 12, cv3._h - 12);
-  }
-}
-// 3D 互動:拖=旋轉、Shift+拖/中鍵/雙指移=平移、滾輪/雙指=縮放
-let d3 = null;
-const t3pts = new Map();
-cv3.addEventListener("pointerdown", e => {
-  e.preventDefault();
-  cv3.setPointerCapture(e.pointerId);
-  t3pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (t3pts.size === 2) {
-    const [a, b2] = [...t3pts.values()];
-    d3 = { mode: "pinch", d0: Math.hypot(a.x - b2.x, a.y - b2.y) || 1, s0: T3.s,
-           cx0: (a.x + b2.x) / 2, cy0: (a.y + b2.y) / 2, panX0: T3.panX, panY0: T3.panY };
-  } else {
-    d3 = { mode: (e.shiftKey || e.button === 1) ? "pan" : "orbit", x: e.clientX, y: e.clientY };
-  }
-});
-cv3.addEventListener("pointermove", e => {
-  if (!d3 || !t3pts.has(e.pointerId)) return;
-  e.preventDefault();
-  t3pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (d3.mode === "pinch" && t3pts.size >= 2) {
-    const [a, b2] = [...t3pts.values()];
-    const d = Math.hypot(a.x - b2.x, a.y - b2.y) || 1;
-    T3.s = Math.min(1e3, Math.max(1e-6, d3.s0 * d / d3.d0));
-    T3.panX = d3.panX0 + ((a.x + b2.x) / 2 - d3.cx0);
-    T3.panY = d3.panY0 + ((a.y + b2.y) / 2 - d3.cy0);
-    render3d(); return;
-  }
-  const dx = e.clientX - d3.x, dy = e.clientY - d3.y;
-  d3.x = e.clientX; d3.y = e.clientY;
-  if (d3.mode === "pan") { T3.panX += dx; T3.panY += dy; }
-  else { T3.th += dx * 0.008; T3.ph = Math.min(1.5, Math.max(0.08, T3.ph + dy * 0.006)); }
-  render3d();
-});
-function end3(e) { t3pts.delete(e.pointerId); if (t3pts.size < 2 && d3 && d3.mode === "pinch") d3 = null; if (!t3pts.size) d3 = null; }
-cv3.addEventListener("pointerup", end3);
-cv3.addEventListener("pointercancel", end3);
-cv3.addEventListener("wheel", e => {
-  e.preventDefault();
-  T3.s = Math.min(1e3, Math.max(1e-6, T3.s * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
-  render3d();
-}, { passive: false });
-$("btn3d").onclick = open3d;
-$("btnClose3d").onclick = close3d;
-$("in3dH").oninput = () => { if (T3.open) render3d(); };
-$("btn3dPng").onclick = () => {
-  const c = document.createElement("canvas"); // 離屏重繪 2x,避開隱藏分頁 GPU 回讀問題
-  c.width = cv3._w * 2; c.height = cv3._h * 2;
-  const x = c.getContext("2d");
-  x.scale(2, 2);
-  render3dTo(x, cv3._w, cv3._h);
-  c.toBlob(bl => download(`3D視圖-${stamp()}.png`, bl), "image/png");
-  toast("已下載 3D 視圖 PNG");
-};
-window.addEventListener("keydown", e => { if (e.key === "Escape" && T3.open) close3d(); });
-
 // ─── 啟動 ───────────────────────────────────────────────
 window.addEventListener("resize", resizeCanvas);
 const restored = loadAutosave();
@@ -2446,7 +2689,7 @@ window.CAD = {
   get doc() { return doc; }, get view() { return view; }, get selection() { return selection; },
   addEntity, redraw, undo, redo, setTool, zoomExtents, extents,
   svgString, dxfString, dimPrimitives, hitTest, s2w, w2s, strokeEntity,
-  open3d, render3dTo, proj3, T3,
+  rotateEntity, mirrorEntity, offsetEntity, intersectSegs,
   setDoc(o) { doc = o; currentLayer = doc.layers[0].name; bumpRev(); renderLayers(); redraw(true); },
 };
 </script>
