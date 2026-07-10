@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#1e2126">
+<link rel="manifest" href="manifest.webmanifest">
 <title>簡易CAD — 2D 繪圖</title>
 <style>
 :root{
@@ -34,6 +36,8 @@ button.primary:hover{background:#3182ce;}
 #cv{position:absolute; inset:0; width:100%; height:100%; display:block; cursor:crosshair; touch-action:none;}
 #touchBar{position:absolute; left:50%; transform:translateX(-50%); bottom:14px; display:none; gap:8px; z-index:15;}
 #touchBar button{padding:10px 16px; font-size:15px; border-radius:8px; background:#2b6cb0ee; border-color:var(--acc); color:#fff;}
+#selBar{position:absolute; left:50%; transform:translateX(-50%); bottom:14px; display:none; gap:8px; z-index:15;}
+#selBar button{padding:10px 18px; font-size:17px; border-radius:8px; background:#2d323bee; border-color:var(--border); color:#fff;}
 .mobile-only{display:none;}
 #floatIn{position:absolute; display:none; z-index:20; width:150px; padding:4px 6px; background:#fff; color:#000; border:2px solid var(--acc); border-radius:3px; font-size:14px; font-family:inherit;}
 
@@ -99,6 +103,16 @@ button.primary:hover{background:#3182ce;}
   #previewWrap{min-height:220px;}
 }
 
+/* ── 我的圖面 ── */
+#filesModal{position:fixed; inset:0; background:#000a; display:none; z-index:55; align-items:center; justify-content:center;}
+#filesModal .dlg{background:var(--panel); border:1px solid var(--border); border-radius:8px; width:min(560px,94vw); max-height:80vh; display:flex; flex-direction:column;}
+#filesModal .dlgHead{display:flex; align-items:center; padding:10px 14px; border-bottom:1px solid var(--border); font-weight:bold;}
+#filesModal .dlgHead button{margin-left:auto;}
+#filesModal .dlgBody{display:flex; gap:10px; padding:12px; min-height:0; flex:1;}
+.fmRow{display:flex; align-items:center; gap:8px; padding:8px 6px; border-bottom:1px solid var(--border);}
+.fmRow .nm{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.fmRow .meta{color:var(--dim); font-size:11px;}
+
 /* ── 實際列印 ── */
 #printArea{display:none;}
 @media print{
@@ -116,6 +130,7 @@ button.primary:hover{background:#3182ce;}
     <button id="btnNew">新增</button>
     <button id="btnOpen">開啟</button>
     <button id="btnSave">儲存</button>
+    <button id="btnFiles">圖面</button>
     <span class="sep"></span>
     <button id="btnUndo">↩ 復原</button>
     <button id="btnRedo">↪ 重做</button>
@@ -163,6 +178,12 @@ button.primary:hover{background:#3182ce;}
         <button id="tbDone">✓ 完成</button>
         <button id="tbCancel">✕ 取消</button>
       </div>
+      <div id="selBar">
+        <button id="sbDup">⧉</button>
+        <button id="sbRot">⟳</button>
+        <button id="sbMir">◀▶</button>
+        <button id="sbDel">✕</button>
+      </div>
     </div>
     <div id="side">
       <h3>圖層 <button id="btnAddLayer" style="float:right;padding:1px 8px;margin-right:8px">＋</button></h3>
@@ -173,6 +194,7 @@ button.primary:hover{background:#3182ce;}
         <label><input type="checkbox" id="chkSnapGrid" checked> 格點鎖點</label>
         <label><input type="checkbox" id="chkOsnap" checked> 物件鎖點</label>
         <label><input type="checkbox" id="chkOrtho"> 正交 (Shift)</label>
+        <label><input type="checkbox" id="chkCross" checked> 十字游標</label>
       </div>
       <div id="offsetBox" class="box" style="display:none">
         <label>偏移距離 <input type="number" id="inOffset" value="100" min="0" step="10"> mm</label>
@@ -237,6 +259,20 @@ button.primary:hover{background:#3182ce;}
         <button id="btnDoPrint">🖨 列印(經印表機)</button>
       </div>
       <div id="previewWrap"></div>
+    </div>
+  </div>
+</div>
+
+<div id="filesModal">
+  <div class="dlg">
+    <div class="dlgHead">我的圖面(存在此裝置的瀏覽器)<button id="btnCloseFiles">✕ 關閉</button></div>
+    <div class="dlgBody" style="flex-direction:column">
+      <div style="display:flex; gap:8px">
+        <input type="text" id="fmName" placeholder="輸入圖面名稱" style="flex:1; background:var(--panel2); border:1px solid var(--border); color:var(--fg); padding:6px 8px; border-radius:4px">
+        <button id="fmSave" class="primary">儲存目前圖面</button>
+      </div>
+      <div id="fmList" style="flex:1; overflow-y:auto; min-height:120px"></div>
+      <div style="color:var(--dim); font-size:12px">超大圖面可能超過瀏覽器容量 — 重要圖請同時用「儲存」下載 .json 檔備份。</div>
     </div>
   </div>
 </div>
@@ -442,6 +478,89 @@ function polySegsAny(e) { // line/rect/poly → 線段陣列(交點鎖點用)
   if (e.type === "line") return [[{ x: e.x1, y: e.y1 }, { x: e.x2, y: e.y2 }]];
   return polySegs(e);
 }
+
+// ─── 控制點(grips):單一選取物件的可拖曳定義點 ─────────
+function gripPoints(e) {
+  const g = [];
+  const P = (x, y, fn) => g.push({ x, y, fn });
+  switch (e.type) {
+    case "line":
+      P(e.x1, e.y1, w => { e.x1 = w.x; e.y1 = w.y; });
+      P(e.x2, e.y2, w => { e.x2 = w.x; e.y2 = w.y; });
+      break;
+    case "rect": {
+      const cs = [[e.x, e.y], [e.x + e.w, e.y], [e.x + e.w, e.y + e.h], [e.x, e.y + e.h]];
+      cs.forEach((c, i) => {
+        const o = cs[(i + 2) % 4]; // 拖一角,對角固定(建立當下快照)
+        P(c[0], c[1], w => {
+          e.x = Math.min(w.x, o[0]); e.y = Math.min(w.y, o[1]);
+          e.w = Math.abs(w.x - o[0]); e.h = Math.abs(w.y - o[1]);
+        });
+      });
+      break;
+    }
+    case "circle":
+      P(e.cx, e.cy, w => { e.cx = w.x; e.cy = w.y; });
+      [[e.r, 0], [0, e.r], [-e.r, 0], [0, -e.r]].forEach(q =>
+        P(e.cx + q[0], e.cy + q[1], w => { const r = Math.hypot(w.x - e.cx, w.y - e.cy); if (r > 1e-9) e.r = r; }));
+      break;
+    case "arc":
+      P(e.cx, e.cy, w => { e.cx = w.x; e.cy = w.y; });
+      P(e.cx + e.r * Math.cos(e.a1), e.cy + e.r * Math.sin(e.a1), w => { e.a1 = Math.atan2(w.y - e.cy, w.x - e.cx); });
+      P(e.cx + e.r * Math.cos(e.a2), e.cy + e.r * Math.sin(e.a2), w => { e.a2 = Math.atan2(w.y - e.cy, w.x - e.cx); });
+      break;
+    case "poly":
+      if (e.pts.length <= 400) e.pts.forEach(p => P(p[0], p[1], w => { p[0] = w.x; p[1] = w.y; }));
+      break;
+    case "text":
+      P(e.x, e.y, w => { e.x = w.x; e.y = w.y; });
+      break;
+    case "dim":
+      if (e.dkind === "rad") {
+        P(e.cx + e.r * Math.cos(e.ang), e.cy + e.r * Math.sin(e.ang), w => { e.ang = Math.atan2(w.y - e.cy, w.x - e.cx); });
+        break;
+      }
+      if (e.dkind === "ang") {
+        P(e.vx, e.vy, w => { const dx = w.x - e.vx, dy = w.y - e.vy; e.vx = w.x; e.vy = w.y; e.ax += dx; e.ay += dy; e.bx += dx; e.by += dy; });
+        break;
+      }
+      P(e.x1, e.y1, w => { e.x1 = w.x; e.y1 = w.y; });
+      P(e.x2, e.y2, w => { e.x2 = w.x; e.y2 = w.y; });
+      {
+        const dx = e.x2 - e.x1, dy = e.y2 - e.y1, L = Math.hypot(dx, dy) || 1e-9;
+        P((e.x1 + e.x2) / 2 - dy / L * e.off, (e.y1 + e.y2) / 2 + dx / L * e.off,
+          w => { e.off = (w.x - e.x1) * (-dy / L) + (w.y - e.y1) * (dx / L); }); // 拖標註線位置
+      }
+      break;
+  }
+  return g;
+}
+function singleSel() {
+  if (tool !== "select" || selection.size !== 1) return null;
+  const id = [...selection][0];
+  const e = doc.entities.find(x => x.id === id);
+  return (e && !layerOf(e).locked) ? e : null;
+}
+function gripAt(mx, my, tol) {
+  const e = singleSel();
+  if (!e) return null;
+  for (const gp of gripPoints(e)) {
+    const s = w2s(gp);
+    if (Math.hypot(s.x - mx, s.y - my) <= (tol || 8)) return { e, fn: gp.fn };
+  }
+  return null;
+}
+function drawGrips() {
+  const e = singleSel();
+  if (!e) return;
+  ctx.save(); ctx.setLineDash([]);
+  ctx.fillStyle = "#4da3ff"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1;
+  for (const gp of gripPoints(e)) {
+    const s = w2s(gp);
+    ctx.fillRect(s.x - 4, s.y - 4, 8, 8); ctx.strokeRect(s.x - 4, s.y - 4, 8, 8);
+  }
+  ctx.restore();
+}
 function hitEntity(e, w, tol) {
   switch (e.type) {
     case "line": return distSeg(w, { x: e.x1, y: e.y1 }, { x: e.x2, y: e.y2 }) < tol;
@@ -644,12 +763,13 @@ function dimAngular(d, h) { // 角度標註:兩邊 + 圓弧 + 角度值
 }
 
 // ─── 鎖點 ───────────────────────────────────────────────
-function getSnap(mx, my, tolOver) {
+function getSnap(mx, my, tolOver, exclude) {
   snapMark = null;
   if ($("chkOsnap").checked) {
     const tol = tolOver || 10; let best = null, bd = tol;
     const w = s2w(mx, my), tw = tol / view.scale; // 世界座標粗篩範圍
-    const near = nearEntities(w, tw);
+    let near = nearEntities(w, tw);
+    if (exclude) near = near.filter(e => e !== exclude);
     for (const e of near) {
       const b = bboxCached(e); // 粗篩:游標不在包圍盒附近就跳過(大圖效能關鍵)
       if (w.x < b.minx - tw || w.x > b.maxx + tw || w.y < b.miny - tw || w.y > b.maxy + tw) continue;
@@ -800,8 +920,10 @@ function redraw(sceneChanged) {
     sceneTimer = setTimeout(() => { renderScene(); redraw(); }, 120);
   }
   ctx.restore();
+  drawCrosshair();
   drawPreview();
   drawEditState();
+  drawGrips();
   drawSnapMark();
   if (marquee) {
     const m = marquee, L = Math.min(m.x1, m.x2), T = Math.min(m.y1, m.y2), W = Math.abs(m.x2 - m.x1), H = Math.abs(m.y2 - m.y1);
@@ -867,6 +989,19 @@ function drawEditState() {
   }
   ctx.restore();
 }
+let hasCursor = false;
+function drawCrosshair() {
+  const el = $("chkCross");
+  if (!el || !el.checked || !hasCursor || lastPointerType === "touch") return;
+  ctx.save();
+  ctx.strokeStyle = "#3f4753"; ctx.lineWidth = 1; ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(cursorS.x, 0); ctx.lineTo(cursorS.x, cv._h);
+  ctx.moveTo(0, cursorS.y); ctx.lineTo(cv._w, cursorS.y);
+  ctx.stroke();
+  ctx.restore();
+}
+cv.addEventListener("mouseleave", () => { hasCursor = false; redraw(); });
 function drawSnapMark() {
   if (!snapMark) return;
   const s = w2s(snapMark);
@@ -909,6 +1044,7 @@ function setTool(t) {
   updateTouchBar();
 }
 let editState = null; // 多步編輯工具的中間狀態
+let gripDrag = null;  // 控制點拖曳 {e, fn}
 function addEntity(e) {
   snapshot();
   e.id = uid(); e.layer = currentLayer;
@@ -933,6 +1069,7 @@ function cancelTool() {
   if (tool === "line" && pts.length) { pts = []; redraw(); updateTouchBar(); return; }
   if (pts.length) { pts = []; redraw(); updateTouchBar(); return; }
   if (editState) { editState = null; redraw(); return; }
+  if (tool === "select" && selection.size) { selection.clear(); updateSelInfo(); redraw(true); return; }
   setTool("select");
 }
 
@@ -948,6 +1085,8 @@ cv.addEventListener("mousedown", e => {
   w = applyOrtho(w, ref);
 
   if (tool === "select") {
+    const g0 = gripAt(mx, my); // 控制點優先於一般點選
+    if (g0) { snapshot(); gripDrag = g0; return; }
     const hit = hitTest(w);
     if (hit) {
       if (e.shiftKey) { selection.has(hit.id) ? selection.delete(hit.id) : selection.add(hit.id); }
@@ -1155,9 +1294,18 @@ function doExtend(ln, w) {
 cv.addEventListener("mousemove", e => {
   const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
   cursorS = { x: mx, y: my };
+  hasCursor = true;
   if (panning) {
     view.tx += mx - panning.mx; view.ty += my - panning.my;
     panning = { mx, my }; redraw();
+    return;
+  }
+  if (gripDrag) { // 拖曳控制點(吸附但排除自己)
+    const wg = getSnap(mx, my, null, gripDrag.e);
+    gripDrag.fn(wg);
+    bbInvalidate(gripDrag.e);
+    $("coords").textContent = `${fmt(wg.x)}, ${fmt(wg.y)} mm`;
+    redraw(true);
     return;
   }
   let w = getSnap(mx, my);
@@ -1180,6 +1328,7 @@ cv.addEventListener("mousemove", e => {
 });
 window.addEventListener("mouseup", e => {
   if (panning) { panning = null; return; }
+  if (gripDrag) { gripDrag = null; bumpRev(); redraw(true); autosave(); updateSelInfo(); return; }
   if (marquee) {
     const m = marquee;
     const a = s2w(Math.min(m.x1, m.x2), Math.max(m.y1, m.y2)); // 左下
@@ -1239,8 +1388,12 @@ cv.addEventListener("pointerdown", e => {
     touchState = { mode: "tap", startX: mx, startY: my, lastX: mx, lastY: my };
     touchState.lp = setTimeout(() => { if (touchState) { touchState.mode = "done"; cancelTool(); updateTouchBar(); } }, 550);
     if (tool === "select") {
-      const hit = hitTest(s2w(mx, my));
-      if (hit && selection.has(hit.id)) touchState.hit = hit; // 按在已選物件上 → 拖曳移動
+      const g = gripAt(mx, my, 16); // 控制點(手指容差大)
+      if (g) touchState.grip = g;
+      else {
+        const hit = hitTest(s2w(mx, my));
+        if (hit && selection.has(hit.id)) touchState.hit = hit; // 按在已選物件上 → 拖曳移動
+      }
     }
   } else if (touchPts.size === 2) {
     if (touchState) clearTimeout(touchState.lp);
@@ -1273,7 +1426,10 @@ cv.addEventListener("pointermove", e => {
   }
   if (touchState.mode === "tap" && Math.hypot(mx - touchState.startX, my - touchState.startY) > 12) {
     clearTimeout(touchState.lp);
-    if (touchState.hit) {
+    if (touchState.grip) {
+      snapshot();
+      touchState.mode = "grip";
+    } else if (touchState.hit) {
       touchState.mode = "move";
       moveDrag = { lastW: getSnap(touchState.startX, touchState.startY, TOUCH_TOL), moved: false };
     } else if (pts.length) {
@@ -1283,7 +1439,13 @@ cv.addEventListener("pointermove", e => {
     }
   }
   const dx = mx - touchState.lastX, dy = my - touchState.lastY;
-  if (touchState.mode === "pan") { view.tx += dx; view.ty += dy; redraw(); }
+  if (touchState.mode === "grip") {
+    const wg = getSnap(mx, my, TOUCH_TOL, touchState.grip.e);
+    touchState.grip.fn(wg);
+    bbInvalidate(touchState.grip.e);
+    redraw(true);
+  }
+  else if (touchState.mode === "pan") { view.tx += dx; view.ty += dy; redraw(); }
   else if (touchState.mode === "move" && moveDrag && selection.size) {
     const w = getSnap(mx, my, TOUCH_TOL);
     const ddx = w.x - moveDrag.lastW.x, ddy = w.y - moveDrag.lastW.y;
@@ -1313,7 +1475,9 @@ function touchEnd(e) {
     } else if (!touchPts.size) { touchState = null; redraw(); }
     return;
   }
-  if (touchState.mode === "move") {
+  if (touchState.mode === "grip") {
+    bumpRev(); redraw(true); autosave(); updateSelInfo();
+  } else if (touchState.mode === "move") {
     if (moveDrag && moveDrag.moved) { bumpRev(); redraw(true); autosave(); }
     moveDrag = null; updateSelInfo();
   } else if (touchState.mode === "tap" && e.type === "pointerup") {
@@ -1349,10 +1513,19 @@ function updateTouchBar() {
   const show = lastPointerType === "touch" && pts.length > 0;
   $("touchBar").style.display = show ? "flex" : "none";
   if (show) {
-    $("tbLen").style.display = ["line", "poly", "circle"].includes(tool) ? "" : "none";
+    $("tbLen").style.display = ["line", "poly", "circle", "rect"].includes(tool) ? "" : "none";
     $("tbDone").style.display = (tool === "poly" && pts.length >= 2) || tool === "line" ? "" : "none";
   }
+  updateSelBar();
 }
+function updateSelBar() { // 手機選取後的浮動操作列
+  const show = lastPointerType === "touch" && tool === "select" && selection.size > 0 && !pts.length;
+  $("selBar").style.display = show ? "flex" : "none";
+}
+$("sbDup").onclick = duplicateSel;
+$("sbDel").onclick = deleteSel;
+$("sbRot").onclick = () => setTool("rotate");
+$("sbMir").onclick = () => setTool("mirror");
 $("tbDone").onclick = () => {
   if (tool === "poly") finishPoly(false);
   else { pts = []; redraw(); }
@@ -1361,22 +1534,7 @@ $("tbDone").onclick = () => {
 $("tbCancel").onclick = () => { cancelTool(); updateTouchBar(); };
 $("tbLen").onclick = () => {
   if (!pts.length) return;
-  floatInput(cv._w / 2 - 75, cv._h - 140, "", val => {
-    const d = parseFloat(val);
-    if (!(d > 0)) return;
-    const last = pts[pts.length - 1];
-    if (tool === "circle") { addEntity({ type: "circle", cx: last.x, cy: last.y, r: d }); pts = []; }
-    else {
-      let dx = cursorW.x - last.x, dy = cursorW.y - last.y;
-      if (!dx && !dy) dx = 1; // 沒拖過方向時預設向右
-      const L = Math.hypot(dx, dy);
-      const np = { x: last.x + dx / L * d, y: last.y + dy / L * d };
-      if (tool === "line") { addEntity({ type: "line", x1: last.x, y1: last.y, x2: np.x, y2: np.y }); pts = [np]; }
-      else pts.push(np);
-      redraw();
-    }
-    updateTouchBar();
-  }, true);
+  floatInput(cv._w / 2 - 75, cv._h - 140, "", applyTypedSize, true);
 };
 $("btnPanel").onclick = () => $("side").classList.toggle("open");
 
@@ -1388,29 +1546,65 @@ window.addEventListener("keydown", e => {
   if (e.ctrlKey && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; }
   if (e.ctrlKey && e.key.toLowerCase() === "s") { e.preventDefault(); saveFile(); return; }
   if (e.ctrlKey && e.key.toLowerCase() === "d") { e.preventDefault(); duplicateSel(); return; }
+  if (e.ctrlKey && e.key.toLowerCase() === "c") { e.preventDefault(); copySel(); return; }
+  if (e.ctrlKey && e.key.toLowerCase() === "x") { e.preventDefault(); if (selection.size) { copySel(); deleteSel(); } return; }
+  if (e.ctrlKey && e.key.toLowerCase() === "v") { e.preventDefault(); pasteClip(); return; }
+  if (e.ctrlKey && e.key.toLowerCase() === "a") {
+    e.preventDefault();
+    if (tool !== "select") setTool("select");
+    selection = new Set(editableEntities().map(en => en.id));
+    updateSelInfo(); redraw(true);
+    return;
+  }
+  if (e.key === "Home") { zoomExtents(); return; }
   if (e.key === "Escape") { cancelTool(); return; }
   if (e.key === "Delete" || e.key === "Backspace") { deleteSel(); return; }
   if (e.key === "Enter" && tool === "poly") { finishPoly(false); return; }
+  // 方向鍵微調選取(一格;Shift=十格)
+  if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key) && tool === "select" && selection.size) {
+    e.preventDefault();
+    const st = gridStep().minor * (e.shiftKey ? 10 : 1);
+    const dx = e.key === "ArrowLeft" ? -st : e.key === "ArrowRight" ? st : 0;
+    const dy = e.key === "ArrowDown" ? -st : e.key === "ArrowUp" ? st : 0;
+    snapshot();
+    for (const en of doc.entities) if (selection.has(en.id)) translateEntity(en, dx, dy);
+    bumpRev(); redraw(true); autosave(); updateSelInfo();
+    return;
+  }
   const map = { l: "line", r: "rect", c: "circle", a: "arc", p: "poly", t: "text", d: "dim", m: "measure", s: "select" };
   if (!e.ctrlKey && map[e.key.toLowerCase()]) { setTool(map[e.key.toLowerCase()]); return; }
-  // 繪製中輸入數字 → 長度/半徑
-  if (/^[0-9.]$/.test(e.key) && pts.length && ["line", "circle", "poly"].includes(tool)) {
-    floatInput(cursorS.x + 15, cursorS.y + 15, e.key, val => {
-      const d = parseFloat(val);
-      if (!(d > 0)) return;
-      const last = pts[pts.length - 1];
-      if (tool === "circle") {
-        snapshotless_addCircle(last, d);
-      } else {
-        const dx = cursorW.x - last.x, dy = cursorW.y - last.y, L = Math.hypot(dx, dy) || 1;
-        const np = { x: last.x + dx / L * d, y: last.y + dy / L * d };
-        if (tool === "line") { addEntity({ type: "line", x1: last.x, y1: last.y, x2: np.x, y2: np.y }); pts = [np]; }
-        else { pts.push(np); }
-        redraw();
-      }
-    }, true);
+  // 繪製中輸入數字 → 長度/半徑;矩形可輸入「寬x高」
+  if (/^[0-9.]$/.test(e.key) && pts.length && ["line", "circle", "poly", "rect"].includes(tool)) {
+    floatInput(cursorS.x + 15, cursorS.y + 15, e.key, applyTypedSize, true);
   }
 });
+function applyTypedSize(val) { // 繪製中鍵入數值的共同處理(鍵盤與手機「長度」鈕共用)
+  const last = pts[pts.length - 1];
+  if (!last) return;
+  if (tool === "rect") {
+    const m = /^(\d*\.?\d+)\s*[xX*×,]\s*(\d*\.?\d+)$/.exec(val.trim());
+    if (!m) { toast("矩形請輸入 寬x高,例如 2000x1000"); return; }
+    const W = parseFloat(m[1]), H = parseFloat(m[2]);
+    const sx = cursorW.x >= last.x ? 1 : -1, sy = cursorW.y >= last.y ? 1 : -1;
+    addEntity({ type: "rect", x: Math.min(last.x, last.x + sx * W), y: Math.min(last.y, last.y + sy * H), w: W, h: H });
+    pts = []; redraw(); updateTouchBar();
+    return;
+  }
+  const d = parseFloat(val);
+  if (!(d > 0)) return;
+  if (tool === "circle") {
+    snapshotless_addCircle(last, d);
+  } else {
+    let dx = cursorW.x - last.x, dy = cursorW.y - last.y;
+    if (!dx && !dy) dx = 1;
+    const L = Math.hypot(dx, dy);
+    const np = { x: last.x + dx / L * d, y: last.y + dy / L * d };
+    if (tool === "line") { addEntity({ type: "line", x1: last.x, y1: last.y, x2: np.x, y2: np.y }); pts = [np]; }
+    else { pts.push(np); }
+    redraw();
+  }
+  updateTouchBar();
+}
 function snapshotless_addCircle(c, r) {
   addEntity({ type: "circle", cx: c.x, cy: c.y, r });
   pts = [];
@@ -1456,6 +1650,39 @@ function duplicateSel() {
   selection = new Set(copies.map(c => c.id));
   bumpRev(); updateSelInfo(); redraw(true); autosave();
 }
+// ── 剪貼簿(Ctrl+C/X/V;跨分頁透過 localStorage) ──
+let clipboard = null;
+function copySel() {
+  if (!selection.size) { toast("未選取任何物件"); return; }
+  clipboard = doc.entities.filter(e => selection.has(e.id)).map(e => JSON.parse(JSON.stringify(e)));
+  try { localStorage.setItem("cad-clip", JSON.stringify(clipboard)); } catch { }
+  toast(`已複製 ${clipboard.length} 個物件(Ctrl+V 貼到游標處)`);
+}
+function pasteClip() {
+  let clip = clipboard;
+  if (!clip) { try { clip = JSON.parse(localStorage.getItem("cad-clip") || "null"); } catch { } }
+  if (!clip || !clip.length) { toast("剪貼簿是空的"); return; }
+  // 以複本包圍盒中心對齊游標(沒游標就偏移一格)
+  let mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity;
+  for (const e of clip) { const b = bbox(e); mnx = Math.min(mnx, b.minx); mny = Math.min(mny, b.miny); mxx = Math.max(mxx, b.maxx); mxy = Math.max(mxy, b.maxy); }
+  const cx = (mnx + mxx) / 2, cy = (mny + mxy) / 2;
+  const dx = hasCursor ? cursorW.x - cx : gridStep().minor;
+  const dy = hasCursor ? cursorW.y - cy : -gridStep().minor;
+  snapshot();
+  const ids = [];
+  const layerNames = new Set(doc.layers.map(l => l.name));
+  for (const src of clip) {
+    const c = JSON.parse(JSON.stringify(src));
+    c.id = uid();
+    if (!layerNames.has(c.layer)) c.layer = currentLayer;
+    translateEntity(c, dx, dy);
+    doc.entities.push(c); ids.push(c.id);
+  }
+  if (tool !== "select") setTool("select");
+  selection = new Set(ids);
+  bumpRev(); updateSelInfo(); redraw(true); autosave();
+  toast(`已貼上 ${ids.length} 個物件`);
+}
 const ENAME = { line: "線段", rect: "矩形", circle: "圓", arc: "圓弧", poly: "折線", text: "文字", dim: "標註" };
 function numField(label, id, val) {
   return `<label class="pf">${label}<input type="number" id="${id}" value="${fmt(val)}" step="any"></label>`;
@@ -1463,7 +1690,7 @@ function numField(label, id, val) {
 function updateSelInfo() {
   const n = selection.size;
   const box = $("selInfo");
-  if (!n) { box.textContent = "未選取"; return; }
+  if (!n) { box.textContent = "未選取"; updateSelBar(); return; }
   const sel = doc.entities.filter(e => selection.has(e.id));
   let html = `已選取 ${n} 個物件`;
   // 圖層下拉(套用到全部選取)
@@ -1512,6 +1739,7 @@ function updateSelInfo() {
       bind("pfTH", v => { if (v > 0) one.h = v; });
     }
   }
+  updateSelBar();
 }
 
 // ─── 圖層 ───────────────────────────────────────────────
@@ -1555,8 +1783,9 @@ $("btnAddLayer").onclick = () => {
 };
 
 // ─── 視圖 ───────────────────────────────────────────────
-function zoomExtents() {
-  const b = extents();
+function zoomExtents() { // 有選取=縮放至選取,否則全圖
+  const selList = selection.size ? doc.entities.filter(e => selection.has(e.id)) : null;
+  const b = extents(selList && selList.length ? selList : null);
   if (!b) { view.scale = 1; view.tx = 60; view.ty = cv._h - 60; redraw(true); return; }
   const mw = b.maxx - b.minx || 100, mh = b.maxy - b.miny || 100;
   view.scale = Math.min((cv._w - 100) / mw, (cv._h - 100) / mh);
@@ -2658,6 +2887,61 @@ $("btnLib").onclick = () => {
   toast(`已插入「${names[idx]}」— 可拖曳移動或用旋轉工具調整`);
 };
 
+// ─── 我的圖面(多圖面管理,存 localStorage) ─────────────
+const FILE_PREFIX = "cad-file:";
+function fmRefresh() {
+  const list = $("fmList");
+  list.innerHTML = "";
+  const items = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(FILE_PREFIX)) {
+      try {
+        const meta = JSON.parse(localStorage.getItem(k));
+        items.push({ name: k.slice(FILE_PREFIX.length), t: meta.t || 0, n: meta.n || 0 });
+      } catch { }
+    }
+  }
+  items.sort((a, b) => b.t - a.t);
+  if (!items.length) { list.innerHTML = "<div style='color:var(--dim);padding:16px'>還沒有存過圖面</div>"; return; }
+  for (const it of items) {
+    const row = document.createElement("div");
+    row.className = "fmRow";
+    const d = new Date(it.t);
+    row.innerHTML = `<span class="nm">${it.name}</span>
+      <span class="meta">${it.n} 圖元 · ${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}</span>`;
+    const bo = document.createElement("button"); bo.textContent = "開啟"; bo.className = "primary";
+    bo.onclick = () => {
+      try {
+        const o = JSON.parse(localStorage.getItem(FILE_PREFIX + it.name));
+        applyLoadedDoc(o.doc, it.name);
+        $("filesModal").style.display = "none";
+      } catch { toast("讀取失敗,資料可能損毀"); }
+    };
+    const bd = document.createElement("button"); bd.textContent = "刪除";
+    bd.onclick = () => {
+      if (!confirm(`確定刪除「${it.name}」?`)) return;
+      localStorage.removeItem(FILE_PREFIX + it.name);
+      fmRefresh();
+    };
+    row.append(bo, bd);
+    list.appendChild(row);
+  }
+}
+$("btnFiles").onclick = () => { $("filesModal").style.display = "flex"; $("fmName").value = ""; fmRefresh(); };
+$("btnCloseFiles").onclick = () => $("filesModal").style.display = "none";
+$("fmSave").onclick = () => {
+  const name = $("fmName").value.trim();
+  if (!name) { toast("請先輸入圖面名稱"); return; }
+  try {
+    localStorage.setItem(FILE_PREFIX + name, JSON.stringify({ t: Date.now(), n: doc.entities.length, doc }));
+    toast(`已儲存「${name}」(${doc.entities.length} 個圖元)`);
+    fmRefresh();
+  } catch {
+    toast("圖面太大,瀏覽器存不下 — 請用「儲存」下載 .json 檔", 6000);
+  }
+};
+
 // 設定
 function syncSettingsUI() {
   $("inTextH").value = doc.settings.textH;
@@ -2673,9 +2957,13 @@ $("btnAutoH").onclick = () => {
   syncSettingsUI(); redraw(true); autosave();
   toast(`字高已設為 ${h} mm`);
 };
-["chkGrid", "chkSnapGrid", "chkOsnap", "chkOrtho"].forEach(id => $(id).onchange = () => redraw(true));
+["chkGrid", "chkSnapGrid", "chkOsnap", "chkOrtho", "chkCross"].forEach(id => $(id).onchange = () => redraw(true));
 
 // ─── 啟動 ───────────────────────────────────────────────
+// PWA:網頁版可「加到主畫面」安裝成 App,離線也能用(file:// 模式自動略過)
+if (location.protocol.startsWith("http") && "serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => { });
+}
 window.addEventListener("resize", resizeCanvas);
 const restored = loadAutosave();
 syncSettingsUI();
