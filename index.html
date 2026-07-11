@@ -1975,6 +1975,12 @@ async function openDwgFile(file) {
     const res = dwgDbToDoc(db);
     if (!res.doc.entities.length) throw new Error("讀到 0 個圖元(版本可能不支援)");
     applyLoadedDoc(res.doc, file.name + (res.skipped ? `,略過 ${res.skipped} 個不支援物件` : ""));
+    // 誠實警告:大檔只讀出極少圖元 = 免費引擎解不完整,別讓使用者以為圖是空的
+    if (file.size > 1024 * 1024 && res.doc.entities.length < file.size / 20000) {
+      setTimeout(() => toast(
+        `⚠ 這張 DWG 較複雜,網頁引擎只讀到 ${res.doc.entities.length} 個圖元,內容可能嚴重缺漏!` +
+        `請改用電腦版流程:把 DWG 拖到「把DWG拖到這裡轉檔.bat」(100% 相容),再開產生的 .json`, 12000), 4500);
+    }
   } catch (err) {
     console.error(err);
     toast("DWG 解析失敗:" + (err && err.message ? err.message : err) + " — 可請對方改存 DXF 再傳", 9000);
