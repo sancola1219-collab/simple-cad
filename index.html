@@ -2090,6 +2090,9 @@ function bulgeChain(vs) { // [[x,y,bulge],...] → 展平後點列
   for (let i = 0; i < vs.length - 1; i++) p.push(...bulgeSeg(vs[i], vs[i + 1]));
   return p;
 }
+// DXF/DWG 匯入:只有這些「2D(OCS)實體」的座標需依 extrusion z<0 做 x 鏡射;
+// LINE/ELLIPSE/SPLINE 是世界座標實體,extrusion 只是法向量,翻了會產生鬼影
+const OCS_TYPES = new Set(["ARC", "CIRCLE", "LWPOLYLINE", "POLYLINE", "TEXT", "ATTRIB", "SOLID", "TRACE"]);
 function tessArcPts(cx, cy, r, a1, sweep) {
   const n = Math.max(8, Math.ceil(Math.abs(sweep) / (Math.PI / 32)));
   const p = [];
@@ -2173,8 +2176,8 @@ function dxfToDoc(buf) {
   };
   function convRaw(r, Min, parentLayer, depth) {
     const ly = lay(r, parentLayer);
-    // OCS:擠出方向 230=-1 時,該實體所有座標繞 Y 軸鏡射(x → -x)
-    const M = (g(r, 230, 1) < 0) ? mmul(Min, [-1, 0, 0, 1, 0, 0]) : Min;
+    // OCS:擠出方向 230=-1 且為 2D 實體時,座標 x → -x
+    const M = (g(r, 230, 1) < 0 && OCS_TYPES.has(r.t)) ? mmul(Min, [-1, 0, 0, 1, 0, 0]) : Min;
     switch (r.t) {
       case "LINE": {
         const p = ap(M, g(r, 10, 0), g(r, 20, 0)), q = ap(M, g(r, 11, 0), g(r, 21, 0));
@@ -2331,7 +2334,8 @@ function dwgDbToDoc(db) {
 
   function convEnt(e, Min, parentLayer, depth) {
     const ly = (e.layer && e.layer !== "0") ? e.layer : (parentLayer || "0");
-    const M = (e.extrusionDirection && e.extrusionDirection.z < 0) ? mmul(Min, [-1, 0, 0, 1, 0, 0]) : Min;
+    // OCS 鏡射只適用 2D 實體(同 dxfToDoc 的 OCS_TYPES 規則)
+    const M = (e.extrusionDirection && e.extrusionDirection.z < 0 && OCS_TYPES.has(e.type)) ? mmul(Min, [-1, 0, 0, 1, 0, 0]) : Min;
     switch (e.type) {
       case "LINE": {
         const a = P(M, e.startPoint), b = P(M, e.endPoint);
