@@ -67,6 +67,12 @@ button.primary:hover{background:#3182ce;}
 
 /* ── 提示訊息 ── */
 #toast{position:fixed; bottom:44px; left:50%; transform:translateX(-50%); background:#111a; color:#fff; padding:8px 18px; border-radius:6px; display:none; z-index:100; max-width:70%;}
+#busy{position:fixed; top:52px; left:50%; transform:translateX(-50%); background:var(--accdark); color:#fff;
+  padding:10px 20px; border-radius:8px; display:none; z-index:110; align-items:center; gap:10px;
+  box-shadow:0 4px 16px #0008; font-size:14px; max-width:86%;}
+#busy .spin{width:16px; height:16px; border:3px solid #fff5; border-top-color:#fff; border-radius:50%;
+  animation:busyspin 0.9s linear infinite; flex:0 0 auto;}
+@keyframes busyspin{to{transform:rotate(360deg);}}
 
 /* ── 列印/匯出 PDF 視窗 ── */
 #printModal{position:fixed; inset:0; background:#000a; display:none; z-index:50; align-items:center; justify-content:center;}
@@ -167,6 +173,8 @@ button.primary:hover{background:#3182ce;}
       <button data-tool="offset">⇉ 偏移</button>
       <button data-tool="trim">✂ 修剪</button>
       <button data-tool="extend">⇥ 延伸</button>
+      <button data-tool="fillet">⌒ 圓角</button>
+      <button data-tool="chamfer">◣ 倒角</button>
       <button id="btnArray">▦ 陣列</button>
       <div class="grp">圖庫</div>
       <button id="btnLib">＋ 設備符號</button>
@@ -217,6 +225,7 @@ button.primary:hover{background:#3182ce;}
 </div>
 
 <div id="toast"></div>
+<div id="busy"><span class="spin"></span><span id="busyMsg"></span></div>
 
 <div id="printModal">
   <div class="dlg">
@@ -320,6 +329,17 @@ function toast(msg, ms = 2200) {
   const t = $("toast"); t.textContent = msg; t.style.display = "block";
   clearTimeout(t._tm); t._tm = setTimeout(() => t.style.display = "none", ms);
 }
+// 持續型進度橫幅(轉檔等長時間操作用;帶秒數計時,直到 busyEnd 才消失)
+let busyTimer = null, busyT0 = 0;
+function busyStart(msg) {
+  busyT0 = Date.now();
+  const upd = () => { $("busyMsg").textContent = `${msg}(已 ${Math.round((Date.now() - busyT0) / 1000)} 秒)`; };
+  upd();
+  $("busy").style.display = "flex";
+  clearInterval(busyTimer);
+  busyTimer = setInterval(upd, 1000);
+}
+function busyEnd() { clearInterval(busyTimer); busyTimer = null; $("busy").style.display = "none"; }
 function w2s(p) { return { x: p.x * view.scale + view.tx, y: -p.y * view.scale + view.ty }; }
 function s2w(x, y) { return { x: (x - view.tx) / view.scale, y: (view.ty - y) / view.scale }; }
 // ── 大圖效能:文件版本號 + 圖層表/可見清單/空間網格快取 ──
@@ -1050,6 +1070,10 @@ function drawEditState() {
     ctx.strokeStyle = "#7fdc7f";
     for (const e of editState.bounds) strokeEntity(ctx, e, view);
   }
+  if (editState.l1) { // 圓角/倒角第一條線:黃色高亮
+    ctx.strokeStyle = "#ffd75e";
+    strokeEntity(ctx, editState.l1, view);
+  }
   if (editState.src) { // 偏移來源:黃色高亮 + 預覽
     ctx.strokeStyle = "#ffd75e";
     strokeEntity(ctx, editState.src, view);
@@ -1100,6 +1124,8 @@ const HINTS = {
   offset: "偏移:先輸入距離(右側面板),點一條線/圓 → 點要偏移的那一側",
   trim: "修剪:點要保留的邊界線(可多條,右鍵完成)→ 逐一點掉要剪掉的線段",
   extend: "延伸:點邊界線(右鍵完成)→ 點要延伸的線靠近的那端",
+  fillet: "圓角:點第一條線 → 點第二條線 → 輸入半徑(0 = 直接接角),線會自動修整",
+  chamfer: "倒角:點第一條線 → 點第二條線 → 輸入切角距離(0 = 直接接角)",
 };
 const NEEDS_SEL = { rotate: 1, mirror: 1, scale: 1 };
 function setTool(t) {
@@ -1308,6 +1334,21 @@ function drawingClick(w) {
       }
       break;
     }
+    case "fillet": case "chamfer": {
+      const hitF = hitTest(w);
+      if (!hitF || hitF.type !== "line") { toast("請點選線段(圓角/倒角目前只支援線段)"); break; }
+      if (!editState) { editState = { l1: hitF, p1: { x: w.x, y: w.y } }; toast("再點第二條線"); break; }
+      if (hitF === editState.l1) { toast("請點另一條線"); break; }
+      const stF = editState; editState = null;
+      const sF = w2s(w);
+      const isCh = tool === "chamfer";
+      floatInput(sF.x, sF.y - 30, "", val => {
+        const v = parseFloat(val);
+        if (isNaN(v) || v < 0) { toast("請輸入 0 或正數(0 = 直接接角)"); return; }
+        applyFillet(stF.l1, stF.p1, hitF, { x: w.x, y: w.y }, v, isCh);
+      }, true);
+      break;
+    }
     case "trim": case "extend": {
       if (!editState) editState = { bounds: [], phase: "bound" };
       if (editState.phase === "bound") {
@@ -1338,6 +1379,44 @@ function applyMirror(p1, p2) {
   for (const e of doc.entities) if (selection.has(e.id)) mirrorEntity(e, p1.x, p1.y, p2.x, p2.y);
   bumpRev(); redraw(true); autosave();
   toast("已鏡射");
+}
+function applyFillet(l1, p1, l2, p2, val, chamfer) { // 兩線圓角/倒角;val=半徑或切距,0=接角
+  const ip = lineIntersect([l1.x1, l1.y1], [l1.x2, l1.y2], [l2.x1, l2.y1], [l2.x2, l2.y2]);
+  if (!ip) { toast("兩線平行,無法作圓角/倒角"); return; }
+  const P = { x: ip[0], y: ip[1] };
+  const dirOf = (ln, pick) => { // 從交點朝「使用者點選側」的單位方向
+    const dx = ln.x2 - ln.x1, dy = ln.y2 - ln.y1, L2 = dx * dx + dy * dy || 1e-12;
+    const t = ((pick.x - P.x) * dx + (pick.y - P.y) * dy) / L2;
+    const s = t >= 0 ? 1 : -1, L = Math.sqrt(L2);
+    return { x: dx / L * s, y: dy / L * s };
+  };
+  const d1 = dirOf(l1, p1), d2 = dirOf(l2, p2);
+  const theta = Math.acos(Math.max(-1, Math.min(1, d1.x * d2.x + d1.y * d2.y)));
+  if (theta < 0.02 || theta > Math.PI - 0.02) { toast("兩線近乎平行,無法作圓角/倒角"); return; }
+  const t = chamfer ? val : val / Math.tan(theta / 2); // 沿兩線的修整距離
+  const T1 = { x: P.x + d1.x * t, y: P.y + d1.y * t };
+  const T2 = { x: P.x + d2.x * t, y: P.y + d2.y * t };
+  snapshot();
+  const pull = (ln, T) => { // 離交點較近的端點拉到切點(修剪或延伸)
+    const dA = Math.hypot(ln.x1 - P.x, ln.y1 - P.y), dB = Math.hypot(ln.x2 - P.x, ln.y2 - P.y);
+    if (dA <= dB) { ln.x1 = T.x; ln.y1 = T.y; } else { ln.x2 = T.x; ln.y2 = T.y; }
+    bbInvalidate(ln);
+  };
+  pull(l1, T1); pull(l2, T2);
+  if (val > 0) {
+    if (chamfer) {
+      doc.entities.push({ id: uid(), type: "line", layer: l1.layer, x1: T1.x, y1: T1.y, x2: T2.x, y2: T2.y });
+    } else {
+      const bx = d1.x + d2.x, by = d1.y + d2.y, bl = Math.hypot(bx, by) || 1e-12;
+      const C = { x: P.x + bx / bl * (val / Math.sin(theta / 2)), y: P.y + by / bl * (val / Math.sin(theta / 2)) };
+      let a1 = Math.atan2(T1.y - C.y, T1.x - C.x);
+      let a2 = Math.atan2(T2.y - C.y, T2.x - C.x);
+      if (norm2pi(a2 - a1) > Math.PI) { const tmp = a1; a1 = a2; a2 = tmp; } // 弧走短邊
+      doc.entities.push({ id: uid(), type: "arc", layer: l1.layer, cx: C.x, cy: C.y, r: val, a1, a2 });
+    }
+  }
+  bumpRev(); redraw(true); autosave();
+  toast(val > 0 ? (chamfer ? `已倒角 ${fmt(val)} mm` : `已圓角 R${fmt(val)}`) : "已直接接角");
 }
 function segOf(e) { return [{ x: e.x1, y: e.y1 }, { x: e.x2, y: e.y2 }]; }
 function boundSegsFor(e) { // 邊界物件轉成線段集合
@@ -1992,32 +2071,38 @@ async function openDwgFile(file) {
   }
   // 本機完整版:localhost 上先嘗試本機 ODA 轉換服務(100% 相容);沒有服務就退回內建引擎
   if (["localhost", "127.0.0.1"].includes(location.hostname)) {
+    let served = false;
     try {
-      toast(`使用本機 ODA 轉換器解析 DWG(100% 相容)…大圖需 1~5 分鐘,請稍候`, 15000);
+      busyStart(`ODA 完整轉換「${file.name}」中,大圖需 1~5 分鐘,請勿關閉`);
       const r = await fetch("/convert-dwg?name=" + encodeURIComponent(file.name), { method: "POST", body: file });
       if (r.ok) {
+        served = true;
         const o = await r.json();
+        busyEnd();
         applyLoadedDoc(o, file.name + " — ODA 完整轉換");
         return;
       }
       if (r.status === 500) {
+        served = true;
+        busyEnd();
         toast("本機轉換失敗:" + (await r.text()).slice(0, 200), 9000);
         return;
       }
       // 404 = 沒開本機轉換服務(例如純 http.server),改走內建引擎
     } catch { /* 服務不在,走內建引擎 */ }
+    finally { if (!served) busyEnd(); }
   }
   if (file.size > 60 * 1024 * 1024) { toast("DWG 超過 60MB,瀏覽器內建引擎吃不下,請在電腦用拖曳轉檔", 7000); return; }
   try {
     if (!ldwgLib) {
-      toast("首次載入 DWG 解析引擎(約 9MB)…", 6000);
+      busyStart("首次載入 DWG 解析引擎(約 9MB)");
       const m = await import("./libredwg/libredwg-web.js");
       window.createModule = m.default;
       await loadScript("libredwg/libredwg-web-wrapper.js");
       ldwgLib = await window["libredwg-web"].LibreDwg.create("libredwg");
     }
-    toast("DWG 解析中…(大檔要幾十秒,畫面凍結是正常的)", 8000);
-    await new Promise(r => setTimeout(r, 80)); // 讓 toast 先畫出來
+    busyStart(`解析「${file.name}」中,大檔要幾十秒,畫面凍結是正常的`);
+    await new Promise(r => setTimeout(r, 80)); // 讓橫幅先畫出來
     const pkg = window["libredwg-web"];
     const buf = await file.arrayBuffer();
     const dwg = ldwgLib.dwg_read_data(buf, pkg.Dwg_File_Type.DWG);
@@ -2036,20 +2121,21 @@ async function openDwgFile(file) {
   } catch (err) {
     console.error(err);
     toast("DWG 解析失敗:" + (err && err.message ? err.message : err) + " — 可請對方改存 DXF 再傳", 9000);
-  }
+  } finally { busyEnd(); }
 }
 function openFile(file) {
   const rd = new FileReader();
   if (/\.dwg$/i.test(file.name || "")) { openDwgFile(file); return; }
   if (/\.dxf$/i.test(file.name || "")) { // DXF 直接開(手機免轉檔)
     if (file.size > 120 * 1024 * 1024) { toast("DXF 超過 120MB,瀏覽器吃不下 — 請在電腦用拖曳轉檔做成 .json", 7000); return; }
-    toast("解析 DXF 中…(大檔要幾十秒)", 8000);
+    busyStart(`解析 DXF「${file.name}」中,大檔要幾十秒`);
     rd.onload = () => {
-      setTimeout(() => { // 讓 toast 先畫出來
+      setTimeout(() => { // 讓橫幅先畫出來
         try {
           const res = dxfToDoc(rd.result);
           applyLoadedDoc(res.doc, file.name + (res.skipped ? `,略過 ${res.skipped} 個不支援物件` : ""));
         } catch (err) { console.error(err); toast("DXF 解析失敗:" + (err && err.message ? err.message : err), 7000); }
+        finally { busyEnd(); }
       }, 50);
     };
     rd.readAsArrayBuffer(file);
@@ -2941,7 +3027,7 @@ async function buildPdfBlob(o) {
 }
 $("btnDlPdf").onclick = async () => {
   const n = visibleEntities().length;
-  toast(n > 50000 ? `產生 PDF 中…(${n} 個圖元,約需 10~30 秒)` : "產生 PDF 中…", 10000);
+  busyStart(n > 50000 ? `產生 PDF 中(${n} 個圖元,約需 10~30 秒)` : "產生 PDF 中");
   await new Promise(r => setTimeout(r, 60));
   try {
     const blob = await buildPdfBlob(printOpts());
@@ -2951,7 +3037,7 @@ $("btnDlPdf").onclick = async () => {
   } catch (err) {
     console.error(err);
     toast("PDF 產生失敗:" + (err && err.message ? err.message : err), 8000);
-  }
+  } finally { busyEnd(); }
 };
 $("btnPdf").onclick = () => {
   if (!visibleEntities().length) { toast("沒有圖形可匯出,請先繪製"); return; }
