@@ -208,10 +208,11 @@ button.primary:hover{background:#3182ce;}
       <div id="offsetBox" class="box" style="display:none">
         <label>偏移距離 <input type="number" id="inOffset" value="100" min="0" step="10"> mm</label>
       </div>
-      <h3>文字/標註</h3>
+      <h3>文字/標註(新建預設)</h3>
       <div class="box">
         <label>文字高度 <input type="number" id="inTextH" min="0.1" step="0.5"> mm</label>
         <label>標註字高 <input type="number" id="inDimH" min="0.1" step="0.5"> mm</label>
+        <label>線型比例 <input type="number" id="inLtScale" min="0.1" step="1"> mm</label>
         <button id="btnAutoH" style="margin-top:4px">依圖面自動調整字高</button>
       </div>
       <h3>選取資訊</h3>
@@ -392,8 +393,9 @@ function nearEntities(w, tw) { // 游標附近(世界座標 ± tw)的可見物�
 }
 
 // ─── 復原/重做 ──────────────────────────────────────────
+function snapState() { return JSON.stringify({ en: doc.entities, ly: doc.layers, cl: currentLayer, st: doc.settings }); }
 function snapshot() {
-  const s = JSON.stringify({ en: doc.entities, ly: doc.layers, cl: currentLayer });
+  const s = snapState();
   undoStack.push(s);
   const cap = s.length > 5e6 ? 10 : 100; // 大圖限制快照數,避免吃光記憶體
   while (undoStack.length > cap) undoStack.shift();
@@ -402,16 +404,17 @@ function snapshot() {
 function restore(s) {
   const o = JSON.parse(s);
   doc.entities = o.en; doc.layers = o.ly; currentLayer = o.cl;
+  if (o.st) { doc.settings = o.st; syncSettingsUI(); } // 設定(含標註字高預設)也可復原
   selection.clear(); bumpRev(); renderLayers(); redraw(true); autosave();
 }
 function undo() {
   if (!undoStack.length) { toast("沒有可復原的步驟"); return; }
-  redoStack.push(JSON.stringify({ en: doc.entities, ly: doc.layers, cl: currentLayer }));
+  redoStack.push(snapState());
   restore(undoStack.pop());
 }
 function redo() {
   if (!redoStack.length) { toast("沒有可重做的步驟"); return; }
-  undoStack.push(JSON.stringify({ en: doc.entities, ly: doc.layers, cl: currentLayer }));
+  undoStack.push(snapState());
   restore(redoStack.pop());
 }
 
@@ -770,7 +773,8 @@ function intersectSegs(a, b, c, d) { // 線段交點(含界內判定),回傳 {x,
 
 // ─── 標註幾何(Canvas / SVG / DXF 共用) ─────────────────
 function dimPrimitives(d, hOver) {
-  const h = hOver || doc.settings.dimH || 3.5;
+  // 字高優先序:呼叫端指定 > 標註自身 h(新標註建立時保存)> 全域預設(舊檔相容)
+  const h = hOver || d.h || doc.settings.dimH || 3.5;
   if (d.dkind === "rad") return dimRadial(d, h);
   if (d.dkind === "ang") return dimAngular(d, h);
   const dx = d.x2 - d.x1, dy = d.y2 - d.y1, L = Math.hypot(dx, dy) || 1e-9;
@@ -926,7 +930,22 @@ function drawGrid(c) {
   c.moveTo(o.x, 0); c.lineTo(o.x, cv._h); c.moveTo(0, o.y); c.lineTo(cv._w, o.y);
   c.stroke();
 }
-function strokeEntity(c, e, vw) { // 以任意 view 畫在任意 context(螢幕/PNG 共用)
+// 線型定義(單位 = 線型比例 ltScale 的倍數,世界 mm):Canvas/SVG/PDF/DXF 共用
+const LTYPES = { dash: [3, 1.5], center: [6, 1, 1, 1], dot: [0.6, 1.8] };
+const LTYPE_NAMES = { dash: "虛線", center: "中心線", dot: "點線" };
+function ltUnit() { return doc.settings.ltScale || 10; }
+function strokeEntity(c, e, vw) { // 線型/線寬包裝(畫完必還原,避免污染後續圖元)
+  const prevW = c.lineWidth;
+  const hasLt = e.lt && LTYPES[e.lt];
+  if (e.lw > 1) c.lineWidth = prevW * e.lw;
+  if (hasLt) c.setLineDash(LTYPES[e.lt].map(v => v * ltUnit() * vw.scale));
+  try { strokeEntityBody(c, e, vw); }
+  finally {
+    if (e.lw > 1) c.lineWidth = prevW;
+    if (hasLt) c.setLineDash([]);
+  }
+}
+function strokeEntityBody(c, e, vw) { // 以任意 view 畫在任意 context(螢幕/PNG 共用)
   const W2S = p => ({ x: p.x * vw.scale + vw.tx, y: -p.y * vw.scale + vw.ty });
   c.beginPath();
   switch (e.type) {
@@ -1263,7 +1282,7 @@ function drawingClick(w) {
     case "dim":
       pts.push(w);
       if (pts.length === 3) {
-        addEntity({ type: "dim", x1: pts[0].x, y1: pts[0].y, x2: pts[1].x, y2: pts[1].y, off: dimOffsetFrom(w) });
+        addEntity({ type: "dim", x1: pts[0].x, y1: pts[0].y, x2: pts[1].x, y2: pts[1].y, off: dimOffsetFrom(w), h: doc.settings.dimH });
         pts = [];
       }
       break;
@@ -1279,7 +1298,7 @@ function drawingClick(w) {
       const hit = hitTest(w);
       if (hit && (hit.type === "circle" || hit.type === "arc")) {
         addEntity({ type: "dim", dkind: "rad", cx: hit.cx, cy: hit.cy, r: hit.r,
-          ang: Math.atan2(w.y - hit.cy, w.x - hit.cx) });
+          ang: Math.atan2(w.y - hit.cy, w.x - hit.cx), h: doc.settings.dimH });
       } else toast("請點在圓或圓弧上");
       break;
     }
@@ -1287,7 +1306,7 @@ function drawingClick(w) {
       pts.push(w);
       if (pts.length === 3) {
         addEntity({ type: "dim", dkind: "ang", vx: pts[0].x, vy: pts[0].y,
-          ax: pts[1].x, ay: pts[1].y, bx: pts[2].x, by: pts[2].y });
+          ax: pts[1].x, ay: pts[1].y, bx: pts[2].x, by: pts[2].y, h: doc.settings.dimH });
         pts = [];
       }
       break;
@@ -1909,9 +1928,22 @@ function updateSelInfo() {
       html += numField("半徑", "pfR", e.r);
     } else if (e.type === "text") {
       html += numField("字高", "pfTH", e.h);
+    } else if (e.type === "dim") {
+      html += numField("字高", "pfDH", e.h || doc.settings.dimH || 3.5);
     }
     html += `</div>`;
     if (e.type === "text") html += `<div style="color:var(--dim);margin-top:2px">「${e.str}」(畫布雙擊可改字)</div>`;
+  }
+  // 線型/線寬(幾何物件)
+  const styleable = sel.filter(e => ["line", "rect", "circle", "arc", "poly"].includes(e.type));
+  if (styleable.length) {
+    const lt0 = styleable[0].lt || "", lw0 = styleable[0].lw || 1;
+    const curLt = styleable.every(e => (e.lt || "") === lt0) ? lt0 : "";
+    const curLw = styleable.every(e => (e.lw || 1) === lw0) ? lw0 : 1;
+    const opt = (v, label, cur) => `<option value="${v}"${String(cur) === String(v) ? " selected" : ""}>${label}</option>`;
+    html += `<div style="display:flex;gap:6px;margin-top:4px">
+      <label class="pf" style="flex:1">線型<select id="selLt">${opt("", "實線", curLt)}${opt("dash", "虛線", curLt)}${opt("center", "中心線", curLt)}${opt("dot", "點線", curLt)}</select></label>
+      <label class="pf" style="flex:1">線寬<select id="selLw">${opt(1, "細", curLw)}${opt(2, "中", curLw)}${opt(3, "粗", curLw)}</select></label></div>`;
   }
   // 填色(封閉圖形)
   const fillable = sel.filter(e => e.type === "rect" || e.type === "circle" || (e.type === "poly" && e.closed));
@@ -1939,6 +1971,19 @@ function updateSelInfo() {
     for (const e of fillable) { if (fEl.checked) e.fill = true; else delete e.fill; }
     bumpRev(); redraw(true); autosave();
   };
+  const ltEl = $("selLt");
+  if (ltEl) ltEl.onchange = () => {
+    snapshot();
+    for (const e of styleable) { if (ltEl.value) e.lt = ltEl.value; else delete e.lt; }
+    bumpRev(); redraw(true); autosave();
+  };
+  const lwEl = $("selLw");
+  if (lwEl) lwEl.onchange = () => {
+    snapshot();
+    const v = parseInt(lwEl.value);
+    for (const e of styleable) { if (v > 1) e.lw = v; else delete e.lw; }
+    bumpRev(); redraw(true); autosave();
+  };
   const gEl = $("selGrp");
   if (gEl) gEl.onclick = groupSel;
   $("selSameLayer").onclick = () => {
@@ -1961,6 +2006,8 @@ function updateSelInfo() {
       bind("pfR", v => { if (v > 0) one.r = v; });
     } else if (one.type === "text") {
       bind("pfTH", v => { if (v > 0) one.h = v; });
+    } else if (one.type === "dim") {
+      bind("pfDH", v => { if (v > 0) one.h = v; }); // 個別標註字高(不影響其他標註)
     }
   }
   updateSelBar();
@@ -2615,7 +2662,9 @@ function svgEntity(e, tf, color, sw) {
   // tf: 世界座標 → SVG 座標 [x,y](y 已翻轉)
   const P = (x, y) => tf({ x, y });
   const filled = e.fill && (e.type === "rect" || e.type === "circle" || (e.type === "poly" && e.closed));
-  const attr = `stroke="${color}" stroke-width="${sw}" ${filled ? `fill="${color}" fill-opacity="0.22"` : `fill="none"`} stroke-linecap="round" stroke-linejoin="round"`;
+  const dash = (e.lt && LTYPES[e.lt]) ? ` stroke-dasharray="${LTYPES[e.lt].map(v => fmt(v * ltUnit())).join(" ")}"` : "";
+  const swE = e.lw > 1 ? sw * e.lw : sw;
+  const attr = `stroke="${color}" stroke-width="${swE}"${dash} ${filled ? `fill="${color}" fill-opacity="0.22"` : `fill="none"`} stroke-linecap="round" stroke-linejoin="round"`;
   switch (e.type) {
     case "line": { const a = P(e.x1, e.y1), b = P(e.x2, e.y2); return `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" ${attr}/>`; }
     case "rect": case "poly": {
@@ -2742,6 +2791,18 @@ function dxfString() {
   G(9, "$INSUNITS"); G(70, 4); // mm
   G(0, "ENDSEC");
   G(0, "SECTION"); G(2, "TABLES");
+  // 線型表:CONTINUOUS + 本軟體的三種線型(圖樣長度依 ltScale 換算)
+  const u = ltUnit();
+  const LT_DXF = { dash: "DASHED", center: "CENTER", dot: "DOT" };
+  G(0, "TABLE"); G(2, "LTYPE"); G(70, 4);
+  G(0, "LTYPE"); G(2, "CONTINUOUS"); G(70, 0); G(3, "Solid line"); G(72, 65); G(73, 0); G(40, 0);
+  for (const key of Object.keys(LT_DXF)) {
+    const pat = LTYPES[key].map(v => v * u);
+    G(0, "LTYPE"); G(2, LT_DXF[key]); G(70, 0); G(3, LTYPE_NAMES[key]); G(72, 65);
+    G(73, pat.length); G(40, fmt(pat.reduce((a, b) => a + b, 0)));
+    pat.forEach((v, i) => G(49, fmt(i % 2 ? -v : v))); // 奇數位是空隙,負值
+  }
+  G(0, "ENDTAB");
   G(0, "TABLE"); G(2, "LAYER"); G(70, doc.layers.length);
   for (const l of doc.layers) {
     G(0, "LAYER"); G(2, dxfEsc(l.name)); G(70, 0); G(62, aciColor(l.color)); G(6, "CONTINUOUS");
@@ -2755,16 +2816,17 @@ function dxfString() {
   };
   for (const e of doc.entities) {
     const ly = dxfEsc(e.layer);
+    const LT6 = () => { if (e.lt && LT_DXF[e.lt]) G(6, LT_DXF[e.lt]); }; // 實體線型
     switch (e.type) {
-      case "line": line(e.x1, e.y1, e.x2, e.y2, ly); break;
-      case "circle": G(0, "CIRCLE"); G(8, ly); G(10, fmt(e.cx)); G(20, fmt(e.cy)); G(40, fmt(e.r)); break;
-      case "arc": G(0, "ARC"); G(8, ly); G(10, fmt(e.cx)); G(20, fmt(e.cy)); G(40, fmt(e.r)); G(50, fmt(deg(e.a1))); G(51, fmt(deg(e.a2))); break;
+      case "line": line(e.x1, e.y1, e.x2, e.y2, ly); LT6(); break;
+      case "circle": G(0, "CIRCLE"); G(8, ly); LT6(); G(10, fmt(e.cx)); G(20, fmt(e.cy)); G(40, fmt(e.r)); break;
+      case "arc": G(0, "ARC"); G(8, ly); LT6(); G(10, fmt(e.cx)); G(20, fmt(e.cy)); G(40, fmt(e.r)); G(50, fmt(deg(e.a1))); G(51, fmt(deg(e.a2))); break;
       case "rect": case "poly": {
         const src = e.type === "rect"
           ? [[e.x, e.y], [e.x + e.w, e.y], [e.x + e.w, e.y + e.h], [e.x, e.y + e.h]]
           : e.pts;
         const closed = e.type === "rect" || e.closed;
-        G(0, "POLYLINE"); G(8, ly); G(66, 1); G(70, closed ? 1 : 0);
+        G(0, "POLYLINE"); G(8, ly); LT6(); G(66, 1); G(70, closed ? 1 : 0);
         for (const q of src) { G(0, "VERTEX"); G(8, ly); G(10, fmt(q[0])); G(20, fmt(q[1])); }
         G(0, "SEQEND");
         break;
@@ -2942,6 +3004,13 @@ async function buildPdfBlob(o) {
   for (const e of visibleEntities()) {
     const col = printColor(layerOf(e).color, o.mono);
     const mixW = h => "#" + [1, 3, 5].map(i => Math.round(parseInt(h.slice(i, i + 2), 16) * 0.22 + 255 * 0.78).toString(16).padStart(2, "0")).join(""); // 混白近似半透明填色
+    // 線型/線寬:q/Q 包住,不污染後續圖元
+    const hasStyle = (e.lt && LTYPES[e.lt]) || e.lw > 1;
+    if (hasStyle) {
+      ops.push("q");
+      if (e.lw > 1) ops.push(`${f2((o.lineW || 0.15) * MM2PT * e.lw)} w`);
+      if (e.lt && LTYPES[e.lt]) ops.push(`[${LTYPES[e.lt].map(v => f2(v * ltUnit() * k)).join(" ")}] 0 d`);
+    }
     switch (e.type) {
       case "line": polyOp([[e.x1, e.y1], [e.x2, e.y2]], false, col); break;
       case "rect": {
@@ -2967,6 +3036,7 @@ async function buildPdfBlob(o) {
         break;
       }
     }
+    if (hasStyle) ops.push("Q");
   }
   // 標題欄(紙面座標,pt)
   if (o.title) {
@@ -3220,16 +3290,21 @@ $("fmSave").onclick = () => {
 function syncSettingsUI() {
   $("inTextH").value = doc.settings.textH;
   $("inDimH").value = doc.settings.dimH;
+  $("inLtScale").value = doc.settings.ltScale || 10;
 }
-$("inTextH").oninput = () => { const v = parseFloat($("inTextH").value); if (v > 0) { doc.settings.textH = v; autosave(); } };
-$("inDimH").oninput = () => { const v = parseFloat($("inDimH").value); if (v > 0) { doc.settings.dimH = v; bbCache = new WeakMap(); bumpRev(); redraw(true); autosave(); } };
+// 全域字高 = 「新」文字/標註的預設值;已建立的標註有自己的 h,不會被追改(舊檔無 h 者仍跟隨全域)
+$("inTextH").onchange = () => { const v = parseFloat($("inTextH").value); if (v > 0) { snapshot(); doc.settings.textH = v; autosave(); } };
+$("inDimH").onchange = () => { const v = parseFloat($("inDimH").value); if (v > 0) { snapshot(); doc.settings.dimH = v; bbCache = new WeakMap(); bumpRev(); redraw(true); autosave(); } };
+$("inLtScale").onchange = () => { const v = parseFloat($("inLtScale").value); if (v > 0) { snapshot(); doc.settings.ltScale = v; redraw(true); autosave(); } };
 $("btnAutoH").onclick = () => {
   const b = extents();
   if (!b) { toast("圖面是空的"); return; }
   const h = Math.max(2.5, parseFloat(((Math.max(b.maxx - b.minx, b.maxy - b.miny)) / 70).toFixed(1)));
+  snapshot();
   doc.settings.textH = h; doc.settings.dimH = h;
+  bbCache = new WeakMap(); bumpRev();
   syncSettingsUI(); redraw(true); autosave();
-  toast(`字高已設為 ${h} mm`);
+  toast(`預設字高已設為 ${h} mm(只影響之後新畫的文字/標註)`);
 };
 ["chkGrid", "chkSnapGrid", "chkOsnap", "chkOrtho", "chkCross"].forEach(id => $(id).onchange = () => redraw(true));
 
